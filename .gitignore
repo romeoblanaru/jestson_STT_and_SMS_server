@@ -39,3 +39,14 @@ logs/
 voice_config.json
 runtime_voice_config.json
 .env
+
+# Third-party repositories and large installations
+jetson-containers/
+jetson-voice/
+whisper.cpp/
+whisper_trt/
+whisper_trt_env/
+ngccli_arm64.tar.gz
+
+# User directories
+Desktop/
