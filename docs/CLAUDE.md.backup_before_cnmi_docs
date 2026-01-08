@@ -1,0 +1,292 @@
+#CLAUDE.md - System Documentation for AI Assistant
+
+## ⚠️ PRIMARY MODEM FOR VOICE CALLS: SIM7600
+**CRITICAL REMINDER**:
+- **SIM7600 is the PRIMARY modem** for phone calls and voice communication
+- EC25 configuration is acceptable but NOT the primary focus
+- Voice call implementation must focus on SIM7600 with audio piping back and forth
+- SMS services must remain ACTIVE during testing (only stop when sending AT commands)
+
+### ⚠️ CRITICAL: SMSTools and Serial Port Access
+**IMPORTANT**: SMSTools keeps serial ports (/dev/ttyUSB2) open exclusively!
+
+**During Detection (sim7600_detector.py):**
+- Stops smstools temporarily (2 seconds)
+- Sends AT commands to verify modem
+- Restarts smstools automatically
+
+**Manual AT commands on ttyUSB2:** Always run `sudo systemctl stop smstools` first
+
+### VPS Communication Endpoints
+**Correct endpoints for VPS communication:**
+- **System notifications**: `http://10.100.0.1:5000/api/send` (via pi_send_message.sh)
+- **Phone call data**: `http://10.100.0.1:8088/webhook/phone_call/receive`
+- **Voice config fetch**: `http://my-bookings.co.uk/webhooks/get_voice_config.php?ip={VPN_IP}&include_key=1`
+
+### Call Handling Strategy (IMPORTANT)
+**Voice config is fetched ON EVERY RING, not lazily:**
+1. **RING detected** → Fetch fresh config from VPS webhook immediately
+2. **Check `answer_after_rings` value:**
+   - If `-1`: DON'T answer the call (reject it)
+   - If `1-10`: Answer after that many rings
+3. **After answering**: Play `welcome_message` from config via TTS
+4. **During call**: Use `language`, `tts_model`, and `voice_settings` from config
+
+**Key benefit**: VPS can control call behavior dynamically per call
+**Documentation**: See `/home/rom/CALL_HANDLING_FLOW.md` for complete flow
+
+## GSM Dongle Communication
+
+### Hardware
+- **Primary**: SIM7600G-H (for voice calls and primary operations)
+- **Quectel EC25-AUX LTE modem .is DEPRECATED
+
+### Common AT Commands
+- `AT` - Test connection
+- `AT+CPIN?` - Check SIM card status
+- `AT+CSQ` - Check signal strength (0-31, higher is better)
+- `AT+CREG?` - Check network registration (0,1 = registered home network)
+- `AT+COPS?` - Check network operator -'not working for SIM7600 series
+
+### Troubleshooting
+- **"+CPIN: NOT INSERTED"** - SIM card not detected, check physical insertion
+- **Terminal blocks when using cat** - Never use `cat` on USB serial ports, use picocom instead
+
+### ⚠️ IMPORTANT: Always Stop SMSTools Before AT Commands on ttyUSB2
+**CRITICAL:** SMSTools keeps the serial port open exclusively. Before sending any AT commands or making modem configuration changes, you MUST stop smstools:
+
+```bash
+# Stop services
+sudo systemctl stop smstools ec25-voice-bot
+
+# Restart services when done
+sudo systemctl start smstools ec25-voice-bot```
+
+**Note:** The SIM7600 auto-detection system handles this automatically.
+
+## 🔮 Modem Manager System - FUTURE DEPLOYMENT (Oct 11, 2025)
+**Status**: `/home/rom/modem_manager/` is **NOT CURRENTLY USED** but **PRESERVED FOR MULTI-COUNTRY DEPLOYMENT**
+
+**Why Keep It:**
+- Contains 40+ European carrier configurations (Lithuania, UK, Germany, Poland, Latvia, Estonia, France, Spain, Italy, Netherlands)
+- Auto-detects carrier from SIM card IMSI (MCC-MNC codes)
+- Configures correct APN per carrier (essential for multi-country deployment)
+- Ready to integrate into `sim7600_detector.py` when deploying across Europe
+
+**Current System (Development):**
+- Hardcoded APN: `"internet"` (works for UK testing)
+- Simple, single-carrier setup
+
+**Future Integration (Production):**
+- Read IMSI from SIM → Lookup carrier in `carriers.json` → Configure correct APN
+- Plug-and-play deployment: Ship device to any EU country, SIM auto-configures
+
+**Key Files (Preserved for Future):**
+- **Carrier Database**: `/home/rom/modem_manager/config/carriers.json` - 40+ carriers with MCC-MNC, APNs, VoLTE settings
+- **Auto-Configure Script**: `/home/rom/modem_manager/scripts/auto_configure_modem.sh` - Ready for multi-country deployment
+- **Documentation**: `/home/rom/modem_manager/docs/` - Testing guides, carrier comparison, deployment plans
+
+## SIM7600 Auto-Detection & Configuration System (CURRENT - Oct 15, 2025)
+
+**Professional USB-based auto-detection with EMI-safe initialization**
+
+### Overview
+- **Detector Service**: `sim7600-detector.service` → runs `/home/rom/sim7600_detector.py`
+- **Voice Bot Service**: `sim7600-voice-bot.service` → runs `/home/rom/sim7600_voice_bot.py`
+- **Purpose**: Automatic detection, configuration, and voice bot startup when SIM7600 is plugged in
+- **Port Mapping**: Saved to `/home/rom/sim7600_ports.json`
+
+### How It Works (Auto-Configuration Workflow)
+
+**1. USB Detection Phase** (`sim7600-detector.service`):
+```
+USB devices appear → Wait 4s for modem enumeration → Verify SIM7600
+```
+
+**2. Modem Verification** (uses ttyUSB2 temporarily):
+- Stops SMSTools for 2 seconds
+- Sends AT commands to confirm it's SIM7600
+- Queries: Manufacturer, Model, Firmware, IMEI, IMSI, Carrier, Signal, APN, VoLTE
+
+**3. Port Configuration**:
+- **ttyUSB0**: Diagnostic
+- **ttyUSB1**: GPS/NMEA
+- **ttyUSB2**: AT Commands (SMSTools - locked for SMS)
+- **ttyUSB3**: AT Commands (Voice Bot - voice calls)
+- **ttyUSB4**: PCM Audio (8kHz raw audio during calls)
+
+**4. Modem Initialization** (EMI-safe gradual power ramp):
+```bash
+Step 1: AT+CFUN=0 (radio OFF) → wait 3s
+Step 2: AT+CFUN=1 (radio ON minimal) → wait 3s
+Step 3: Configure APN (AT+CGDCONT) → wait 1s
+Step 4: Wait 7s for network to settle
+Step 5: AT+CGACT=1,1 (activate PDP context - HIGH POWER/EMI risk)
+Step 6: Configure RNDIS/ECM internet (usb0/wwan0, NOT PPP)
+Step 7: Wait 2s for modem to settle
+```
+**Why gradual?** Fast AT commands + radio enabling creates EMF interference that disrupts USB hub
+
+**5. Voice Bot Startup**:
+- Saves port mapping to `/home/rom/sim7600_ports.json`
+- Restarts SMSTools
+- Starts `sim7600-voice-bot.service`
+- Sends status report to VPS via `pi_send_message.sh`
+
+**6. Voice Bot Initialization** (runs on EVERY service restart):
+```bash
+AT          # Test connection
+ATE0        # Disable echo
+AT+CSCLK=0  # Disable auto-sleep (prevents I/O errors!)
+AT+CLVL=5   # Set volume
+AT+CLIP=1   # Enable caller ID (shows phone number)
+AT+CRC=1    # Enable RING notifications (CRITICAL for call detection!)
+```
+
+### Key AT Commands for Call Detection
+- **`AT+CLIP=1`**: Enables Caller Line Identification (shows WHO is calling)
+  - Returns: `+CLIP: "07504128961",129,,,"",0`
+- **`AT+CRC=1`**: Enables extended RING reporting (tells bot phone is RINGING)
+  - Returns: `RING` message on incoming call
+- **Both required**: CLIP shows the number, CRC triggers the answer logic
+
+### Service Management
+
+**Check Status:**
+```bash
+systemctl status sim7600-detector.service
+systemctl status sim7600-voice-bot.service
+```
+
+**View Logs:**
+```bash
+journalctl -u sim7600-detector -f
+journalctl -u sim7600-voice-bot -f
+tail -f /var/log/sim7600_voice_bot.log
+```
+
+**Manual Restart:**
+```bash
+sudo systemctl restart sim7600-voice-bot
+```
+
+### Troubleshooting Call Detection
+
+**Symptoms**: Bot sees caller ID but doesn't answer
+**Cause**: RING notifications not enabled (`AT+CRC=1` missing)
+**Fix**: Restart voice bot service (initializes AT+CRC=1 automatically)
+
+**Verify RING is enabled:**
+```bash
+sudo systemctl stop smstools
+timeout 3 bash -c 'echo -e "AT+CRC?\r" > /dev/ttyUSB3; sleep 0.5; cat /dev/ttyUSB3'
+sudo systemctl start smstools
+```
+Expected: `+CRC: 1` (enabled) or `+CRC: 0` (disabled)
+
+## System Services
+
+### SIM7600 Voice Bot (Primary) - UPDATED Oct 12, 2025
+- **Service**: `systemctl status sim7600-voice-bot.service`
+- **Detector**: `systemctl status sim7600-detector.service`
+- **Script**: `/home/rom/sim7600_voice_bot.py`
+- **Features**:
+  - **Fetches fresh config from VPS on EVERY RING** (not lazy loading)
+  - **Dynamic call control**: answer_after_rings=-1 means DON'T answer
+  - **Serial port raw PCM audio** via /dev/ttyUSB4 (8kHz, 16-bit)
+  - **AT+CPCMREG=1** enables PCM audio after call connects
+  - **VAD-based conversation flow** - prevents talking over caller
+  - **WebRTC VAD** detects 800ms silence before bot speaks (lightweight, telephony-optimized)
+  - Welcome message played after answering (from VPS config)
+  - SMSTools auto-management (stop on start, restart on exit)
+  - Ready for Whisper integration
+- **Audio Device**: `/dev/ttyUSB4` (serial port raw PCM, NOT USB Audio Class)
+- **Config**: Fetched from VPS webhook on every call
+- **Logs**: `journalctl -u sim7600-voice-bot.service -f` and `/var/log/sim7600_voice_bot.log`
+- **Docs**:
+  - `/home/rom/CALL_HANDLING_FLOW.md` (complete call flow documentation)
+  - `/home/rom/docs/VAD_CONVERSATION_FLOW.md` (VAD implementation guide)
+  - `/home/rom/modem_manager/docs/SIM7600_AUDIO_SOLUTION.md` (serial audio architecture)
+  - `/home/rom/SMSTOOLS_HANDLING.md` (SMSTools management strategy)
+
+### EC25 Voice Bot (Secondary) - UPDATED Oct 13, 2025
+- ** DEPRECATED from Oct 14, 2025
+- **Service**: `systemctl status ec25-voice-bot.service`
+- **Script**: `/home/rom/ec25_voice_bot_v3.py`
+- **Features**:
+  - Answers calls after 2 rings
+  - **Real-time USB audio** via hw:EC25AUX (8kHz)
+  - **WebRTC VAD** for pause detection (800ms, lightweight)
+  - Ready for Whisper integration
+  - Debug mode saves audio chunks
+- **Audio Device**: `hw:EC25AUX` (USB Audio Class enabled)
+- **Config**: `/home/rom/vad_config.py`
+- **Logs**: `journalctl -u ec25-voice-bot.service -f`
+- **Audio**: `/home/rom/Audio_wav/` (raw, processed, debug segments)
+- **Docs**:
+  - `/home/rom/docs/EC25_USB_AUDIO_SETUP.md` (USB Audio setup)
+  - `/home/rom/docs/Audio_Recording_VAD_Guide.md` (VAD guide)
+  - `/home/rom/docs/AUDIO_HARDWARE_REQUIREMENTS.md` (architecture)
+- **Test**: `python3 /home/rom/to_test/test_ec25_audio.py`
+
+### SMS Tools
+- **Service**: `systemctl status smstools`
+- **Config**: `/etc/smsd.conf`
+- **Device**: `/dev/ttyUSB2` (shared with voice bot via handover)
+- **API**: Port 8088 - `/home/rom/SMS_Gateway/simple_sms_api_unicode.py`
+- **Logs**: `/var/log/smstools/smsd.log`
+
+### Webmin
+- URL: https://192.168.1.7:10000 or https://192.168.0.111:10000
+- Username: root
+- Password: (set by user)
+
+### WireGuard VPN
+- Config: `/etc/wireguard/wg0.conf`
+- Status: `sudo wg show`
+- IP: 10.100.0.10/24
+
+## Network Configuration
+
+### WiFi Priority
+1. RomeoSamsung (Phone-Hotspot) - Priority 30
+2. TP-Link_Romeo (preconfigured) - Priority 20
+
+Managed by NetworkManager: `nmcli connection show`
+
+## File Management Rules
+
+### Backup Strategy
+When making major updates to existing files:
+- **NEVER** rename the original file for backup purposes
+- **ALWAYS** copy the original content to a backup file with suffix: `_old1`, `_old2`, `_old3`, etc.
+- **ALWAYS** make the updates in the original file, maintaining the same filename
+- Example: When updating `config.py`, first copy it to `config_old1.py`, then update `config.py`
+
+### Test Scripts Organization
+- **ALL** test scripts must be created or saved in the `/home/rom/to_test/` directory
+- This includes:
+  - Unit tests
+  - Integration tests
+  - Benchmark scripts
+  - Validation scripts
+  - Any temporary testing code
+**ALL** service scripts must be created or saved in the `/home/rom/system_services/` directory
+
+### Temporary testing code
+       
+       ### Directory Structure
+         Organized structure for system files:
+       
+         **TTS Modules** (`/home/rom/TTS/`):
+        - `tts_azure.py` - Azure Cognitive Services TTS
+         - `tts_openai.py` - OpenAI TTS
+         - `tts_google.py` - Google Cloud TTS
+         - `tts_liepa.py` - Liepa TTS (Lithuanian)
+         - `tts_base.py` - Base abstract class
+         - Import: `from TTS.tts_azure import AzureTTS`
+       
+         **System Services** (`/home/rom/system_services/`):
+         - `sim7600-voice-bot.service` - SIM7600 voice bot service file
+         - `sim7600-detector.service` - SIM7600 detector service file
+         - Note: Service files stored here for reference; actual systemd services installed in `/etc/systemd/system/`

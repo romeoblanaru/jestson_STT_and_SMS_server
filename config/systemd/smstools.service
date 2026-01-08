@@ -1,0 +1,15 @@
+[Unit]
+Description=SMSTools Daemon
+After=network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/smsd -c/etc/smsd.conf -p/run/smsd.pid
+ExecStop=/usr/bin/killall smsd
+PIDFile=/run/smsd.pid
+Restart=always
+RestartSec=10
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

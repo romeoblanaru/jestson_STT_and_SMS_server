@@ -1,0 +1,1 @@
+- Add to memory - You are installed on an ENVIDIA JETSON ORIN NANO station , with main puorpose to run an STT service or other AI services

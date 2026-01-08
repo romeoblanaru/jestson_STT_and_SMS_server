@@ -1,0 +1,225 @@
+================================================================================
+                    SIM7600G-H MODEM CRASH REPORT
+              Submitted to SIMCOM Technical Support
+================================================================================
+
+Date: 2025-10-14
+Reporter: Romeo
+Hardware: Raspberry Pi with SIM7600G-H modem
+Manufacturer: SIMCOM INCORPORATED
+Model: SIMCOM_SIM7600G-H
+Firmware: SIM7600G_V2.0.2
+IMEI: 862636055891897
+SIM IMSI: 234159593176535
+Carrier: Vodafone UK (234-15)
+
+AT+SIMCOMATI Output: NOT CAPTURED
+  Reason: Modem crashes before extended info can be retrieved
+  Note: This SIMCOM-specific command would provide detailed version info
+        but cannot be executed due to modem instability
+
+================================================================================
+PROBLEM SUMMARY
+================================================================================
+
+The SIM7600G-H modem crashes within 15-90 seconds after USB connection,
+resulting in complete USB enumeration failure (kernel error -71) and
+disappearance from USB bus. Physical unplug/replug required to recover.
+
+Kernel Error Messages:
+  - "Cannot enable. Maybe the USB cable is bad?"
+  - "device not accepting address, error -71"
+  - "unable to enumerate USB device"
+
+================================================================================
+AT COMMAND SEQUENCE SENT DURING INITIALIZATION
+================================================================================
+
+PHASE 1: MODEM DETECTION (via /dev/ttyUSB2)
+------------------------------------------------------------
+1. AT
+   Purpose: Basic connectivity test
+   Response: OK
+
+2. AT+CGMI
+   Purpose: Query manufacturer to confirm SIM7600
+   Response: SIMCOM
+   Result: ✅ Success
+
+PHASE 2: MODEM DETAILS QUERY (via /dev/ttyUSB2)
+------------------------------------------------------------
+3. ATI
+   Purpose: Get manufacturer, model, firmware, IMEI
+   Response: Started responding
+   Result: 🔴 I/O ERROR - Modem crashed during response
+
+3b. AT+SIMCOMATI
+   Purpose: Get SIMCOM-specific extended version information
+   Status: NOT CAPTURED (modem crashes before this can be executed)
+   Note: This command should provide detailed modem configuration info
+
+4. AT+CIMI
+   Purpose: Get IMSI (SIM card number)
+   Status: Not reached (modem crashed)
+
+5. AT+CSQ
+   Purpose: Get signal strength
+   Status: Not reached (modem crashed)
+
+6. AT+COPS?
+   Purpose: Get network carrier
+   Status: Not reached (modem crashed)
+
+7. AT+CGDCONT?
+   Purpose: Query current APN configuration
+   Status: Not reached (modem crashed)
+
+8. AT+CEVOLTE?
+   Purpose: Query VoLTE status
+   Status: Not reached (modem crashed)
+
+PHASE 3: VOICE BOT INITIALIZATION (via /dev/ttyUSB3)
+------------------------------------------------------------
+Note: Voice bot starts AFTER modem details query
+
+9. AT
+   Purpose: Test connection
+   Response: OK
+   Result: ✅ Success
+
+10. ATE0
+    Purpose: Disable echo
+    Response: OK
+    Result: ✅ Success
+
+11. AT+CEXTERNTONE=1
+    Purpose: Enable external tone
+    Response: ERROR
+    Result: Expected (not supported on SIM7600)
+
+12. AT+CLVL=5
+    Purpose: Set volume level
+    Response: OK
+    Result: ✅ Success
+
+13. AT+CRSL=5
+    Purpose: Set ringer sound level
+    Response: ERROR
+    Result: Expected (not supported on SIM7600)
+
+14. AT+CLIP=1
+    Purpose: Enable caller ID
+    Response: OK
+    Result: ✅ Success
+
+PHASE 4: INTERNET CONFIGURATION (DISABLED IN LATEST TEST)
+------------------------------------------------------------
+Note: These commands were SKIPPED in latest test, modem still crashed
+
+15. AT+CGDCONT=1,"IP","internet"
+    Purpose: Set APN for data connection
+    Status: SKIPPED (test to isolate crash cause)
+
+16. AT+CGACT=1,1
+    Purpose: Activate PDP context
+    Status: SKIPPED (test to isolate crash cause)
+
+================================================================================
+TEST RESULTS
+================================================================================
+
+TEST #1: Normal Configuration (with internet setup)
+------------------------------------------------------------
+Timeline:
+  - 13:43:05 - Modem detected
+  - 13:43:06 - AT+CGDCONT executed - OK
+  - 13:43:07 - AT+CGACT=1,1 executed - I/O ERROR
+  - 13:43:34 - Modem crashed (USB error -71)
+Duration: ~30 seconds
+Conclusion: Crash occurs shortly after AT+CGACT=1,1
+
+TEST #2: Internet Configuration Disabled
+------------------------------------------------------------
+Timeline:
+  - 14:57:10 - Modem detected
+  - 14:57:16 - I/O error during ATI command
+  - 14:57:19 - Internet config SKIPPED
+  - 14:57:50 - Voice bot started successfully
+  - 14:59:28 - Modem crashed (USB error -71)
+Duration: ~90 seconds
+Conclusion: Modem crashes WITHOUT internet config (but lasts 3x longer)
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. PRIMARY ISSUE: Hardware/USB Communication Failure
+   - Same kernel error -71 occurs with OR without AT+CGACT command
+   - USB enumeration fails completely
+   - Modem disappears from USB bus
+   - Recovery requires physical unplug/replug
+
+2. SECONDARY ISSUE: AT Commands Accelerate Crash
+   - With rapid AT commands: crashes in 15-30 seconds
+   - Without internet config: crashes in 90 seconds
+   - Early I/O error during ATI command (reading modem details)
+   
+3. ABNORMAL BEHAVIOR: Port Renumbering
+   - Expected: ttyUSB0-4
+   - Observed: ttyUSB0,1,3,4,5 (ttyUSB2 missing, ttyUSB5 appeared)
+   - Suggests USB re-enumeration instability
+
+4. CONSISTENT CRASH PATTERN:
+   - Always results in kernel error -71
+   - Always requires physical reconnection
+   - Occurs under multiple test conditions
+   - Timing varies but crash is inevitable
+
+================================================================================
+HARDWARE CONFIGURATION
+================================================================================
+
+Platform: Raspberry Pi (Linux 6.12.25+rpt-rpi-v8)
+Connection: USB Y-cable junction with dual power feeding
+  - One branch: USB data connection to Raspberry Pi
+  - Second branch: Additional USB power supply to modem
+  - Purpose: Provides supplemental power beyond Pi's USB port capacity
+Power Supply:
+  - Raspberry Pi: Standard power supply
+  - Modem: Additional USB power via Y-cable second branch
+USB Cable Type: USB Y-cable (data + power junction)
+Note: Replacement standard USB cable ordered for testing to isolate cable issues
+
+================================================================================
+QUESTIONS FOR SIMCOM TECHNICAL SUPPORT
+================================================================================
+
+1. Is kernel error -71 (EPROTO) a known issue with SIM7600G-H?
+
+2. Are there known issues with ATI command causing USB instability?
+
+3. Is there a recommended delay between AT commands to prevent crashes?
+
+5. Are there specific USB power requirements not met by standard Pi supply?
+
+6. Is there a firmware update that addresses USB enumeration stability?
+
+7. Could rapid AT command sequences trigger a modem watchdog or protection?
+
+================================================================================
+REQUESTED ASSISTANCE
+================================================================================
+
+1. Diagnostic procedure to determine if modem hardware is defective
+
+2. Recommended AT command sequence with appropriate delays
+
+3. USB power requirements and recommendations
+
+4. Any known fixes or workarounds for kernel error -71
+
+5. Confirmation if this is a known issue or indicates defective unit
+
+================================================================================
+END OF REPORT
+================================================================================

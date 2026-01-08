@@ -1,0 +1,36 @@
+# Large model files (over 300MB) - see LARGE_FILES.md for descriptions
+.cache/
+whisper.cpp/models/*.bin
+riva_quickstart_v2.19.0/model_repository/
+parakeet-tdt-0.6b-v3/*.nemo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Logs
+*.log
+logs/
+/var/log/
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# System files
+.Trash-*/
+.directory
