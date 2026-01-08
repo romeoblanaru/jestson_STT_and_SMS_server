@@ -1,0 +1,127 @@
+╔══════════════════════════════════════════════════════════════╗
+║              STT SERVER SERVICE MANAGEMENT GUIDE             ║
+╠══════════════════════════════════════════════════════════════╣
+
+1. CHECK SERVICE STATUS
+   ─────────────────────────────────────────────────────────────
+   sudo systemctl status wg-quick@wg0       # WireGuard VPN
+   sudo systemctl status riva-server        # Riva STT
+   sudo systemctl status riva-wrapper       # OGG Wrapper
+   sudo docker ps | grep riva-speech        # Riva container
+   sudo wg show                             # WireGuard details
+
+2. START/STOP SERVICES
+   ─────────────────────────────────────────────────────────────
+   # Start all services
+   sudo systemctl start wg-quick@wg0
+   sudo systemctl start riva-server
+   sudo systemctl start riva-wrapper
+
+   # Stop all services
+   sudo systemctl stop riva-wrapper
+   sudo systemctl stop riva-server
+   sudo systemctl stop wg-quick@wg0
+
+3. RESTART SERVICES
+   ─────────────────────────────────────────────────────────────
+   sudo systemctl restart wg-quick@wg0      # Restart VPN
+   sudo systemctl restart riva-server       # Restart Riva
+   sudo systemctl restart riva-wrapper      # Restart wrapper
+
+4. VIEW LOGS
+   ─────────────────────────────────────────────────────────────
+   sudo journalctl -u wg-quick@wg0 -f       # WireGuard logs
+   sudo journalctl -u riva-server -f        # Riva logs
+   sudo journalctl -u riva-wrapper -f       # Wrapper logs
+   sudo docker logs -f riva-speech          # Riva container logs
+
+5. ENABLE/DISABLE AUTO-START
+   ─────────────────────────────────────────────────────────────
+   sudo systemctl enable wg-quick@wg0       # Enable at boot
+   sudo systemctl disable wg-quick@wg0      # Disable at boot
+
+6. TEST CONNECTIVITY
+   ─────────────────────────────────────────────────────────────
+   # Test VPN
+   ping 10.100.0.1
+
+   # Test STT wrapper locally
+   curl http://localhost:9001/health
+
+   # Test STT wrapper via VPN
+   curl http://10.100.0.2:9001/health
+
+   # Test STT wrapper via local network
+   curl http://192.168.1.9:9001/health
+
+7. TRANSCRIBE AUDIO
+   ─────────────────────────────────────────────────────────────
+   # Via VPN
+   curl -X POST \
+     -F "audio=@file.ogg" \
+     -F "language=lt-LT" \
+     http://10.100.0.2:9001/transcribe
+
+   # Via local network
+   curl -X POST \
+     -F "audio=@file.ogg" \
+     -F "language=ro-RO" \
+     http://192.168.1.9:9001/transcribe
+
+8. PERFORMANCE MONITORING
+   ─────────────────────────────────────────────────────────────
+   # Check WireGuard transfer stats
+   sudo wg show wg0
+
+   # Monitor memory usage
+   free -h
+
+   # Monitor network bandwidth
+   iftop -i wg0
+
+9. TROUBLESHOOTING
+   ─────────────────────────────────────────────────────────────
+   # If WireGuard won't start:
+   sudo modprobe wireguard
+   sudo wg-quick up wg0
+
+   # If Riva won't start (out of memory):
+   free -h
+   sudo systemctl restart riva-server
+
+   # If wrapper can't connect to Riva:
+   sudo docker ps | grep riva-speech
+   curl http://localhost:9000  # Should show Riva response
+
+10. CONFIGURATION FILES
+    ────────────────────────────────────────────────────────────
+    WireGuard:     /etc/wireguard/wg0.conf
+    Riva config:   /home/rom/riva_quickstart_v2.19.0/config.sh
+    Wrapper:       /home/rom/riva_ogg_wrapper.py
+    Systemd:       /etc/systemd/system/riva-*.service
+                   /etc/systemd/system/wg-quick@wg0.service
+
+╚══════════════════════════════════════════════════════════════╝
+
+NETWORK CONFIGURATION:
+  Local IP:     192.168.1.9
+  VPN IP:       10.100.0.2
+  VPN Network:  10.100.0.0/24
+  VPN Server:   144.91.96.97:443
+
+PORTS:
+  9000: Riva GRPC (WAV files only)
+  9001: OGG Wrapper (all audio formats)
+
+LANGUAGES SUPPORTED:
+  lt-LT (Lithuanian)
+  ro-RO (Romanian)
+  en-US (English)
+  ... and 100+ more languages
+
+BOOT SEQUENCE:
+  1. Network → Docker
+  2. WireGuard module loads
+  3. WireGuard VPN starts
+  4. Riva server starts (2-3 min)
+  5. OGG wrapper starts

@@ -1,0 +1,10 @@
+{
+  "config_port": "/dev/ttyUSB3",
+  "nmea": "/dev/ttyUSB1",
+  "sms_port": "/dev/ttyUSB2",
+  "at_command": "/dev/ttyUSB3",
+  "audio": "/dev/ttyUSB4",
+  "apn": "pp.vodafone.co.uk",
+  "ims_apn": "ims",
+  "carrier": "Vodafone UK"
+}
