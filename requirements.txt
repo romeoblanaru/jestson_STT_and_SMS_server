@@ -1,0 +1,25 @@
+# Core dependencies
+pyserial>=3.5
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Voice bot dependencies
+webrtcvad>=2.0.10
+numpy>=1.24.0
+
+# TTS providers (optional - install as needed)
+azure-cognitiveservices-speech>=1.35.0
+openai>=1.0.0
+google-cloud-texttospeech>=2.14.0
+
+# Web framework for SMS API
+flask>=3.0.0
+
+# Audio processing
+sounddevice>=0.4.6
+scipy>=1.11.0
+
+# Whisper integration (optional)
+# openai-whisper>=20231117
+# torch>=2.0.0
+# torchaudio>=2.0.0

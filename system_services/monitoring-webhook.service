@@ -1,0 +1,14 @@
+[Unit]
+Description=Monitoring Webhook Server
+After=network.target
+
+[Service]
+Type=simple
+User=rom
+WorkingDirectory=/home/rom
+ExecStart=/usr/bin/python3 /home/rom/monitoring_webhook.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

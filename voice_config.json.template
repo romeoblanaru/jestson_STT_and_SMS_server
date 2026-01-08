@@ -1,0 +1,26 @@
+{
+  "workpoint_id": 17,
+  "workpoint_name": "Dumbrava Salon 1",
+  "phone_number": "+447768261021",
+  "ip_address": "10.100.0.11",
+  "workpoint_language": "ro",
+  "tts_model": "azure",
+  "tts_access_link": "https://westeurope.api.cognitive.microsoft.com/",
+  "stt_model": "WHISPER_TINY",
+  "language": "ro",
+  "welcome_message": "Bună ziua! Ați contactat punctul nostru de lucru numărul doi prin sistemul Azure. Cu ce vă pot ajuta?",
+  "answer_after_rings": 1,
+  "voice_settings": {
+    "pitch": 1,
+    "speed": 1.2,
+    "style": "friendly",
+    "voice": "ro-RO-AlinaNeural"
+  },
+  "vad_threshold": 0.5,
+  "silence_timeout": 800,
+  "audio_format": "Raw8Khz16BitMonoPcm",
+  "buffer_size": 4096,
+  "is_active": true,
+  "updated_at": "2025-10-11 21:27:22",
+  "tts_secret_key": "YOUR_AZURE_SPEECH_SERVICES_KEY_HERE"
+}

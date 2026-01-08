@@ -1,0 +1,22 @@
+[Unit]
+Description=EC25 Voice Bot with PJSUA
+After=network.target smstools.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=rom
+Group=dialout
+WorkingDirectory=/home/rom
+ExecStart=/usr/bin/python3 /home/rom/ec25_voice_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Grant access to audio and serial devices
+SupplementaryGroups=audio
+PrivateDevices=no
+
+[Install]
+WantedBy=multi-user.target

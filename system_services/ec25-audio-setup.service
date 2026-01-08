@@ -1,0 +1,15 @@
+[Unit]
+Description=EC25 Audio & VoLTE Auto-Configuration
+After=network.target smstools.service
+Wants=smstools.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ec25_audio_setup.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

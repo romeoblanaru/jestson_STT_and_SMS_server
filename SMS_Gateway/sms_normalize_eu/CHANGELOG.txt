@@ -1,0 +1,6 @@
+# CHANGELOG
+
+2025-10-19 v1.0.0
+- Initial release: EU/EEA/UK number normalization for SMSTools3 checkhandler.
+- Handles + / 00 / bare country codes / national formats.
+- Added DEFAULT_CC fallback (default +44).

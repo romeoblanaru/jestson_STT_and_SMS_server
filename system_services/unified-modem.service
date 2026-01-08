@@ -1,0 +1,23 @@
+[Unit]
+Description=Unified Modem Manager for EC25 (SMS + Voice)
+After=network.target
+Conflicts=smstools.service ec25-voice-bot.service
+
+[Service]
+Type=simple
+User=rom
+Group=dialout
+SupplementaryGroups=audio smsd
+WorkingDirectory=/home/rom
+ExecStart=/usr/bin/python3 /home/rom/unified_modem_manager.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Permissions for modem and audio access
+PrivateDevices=no
+ReadWritePaths=/var/spool/sms /home/rom/Audio_wav
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+[Unit]
+Description=Internet Connection Monitor with PPP Failover
+Documentation=https://github.com/yourusername/voice-bot
+After=network-online.target sim7600-detector.service
+Wants=network-online.target
+# Don't start if SIM7600 detector hasn't detected the modem yet
+BindsTo=sim7600-detector.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rom
+ExecStart=/usr/bin/python3 /home/rom/internet_monitor.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=internet-monitor
+
+# Resource limits
+MemoryLimit=100M
+CPUQuota=20%
+
+# Security
+NoNewPrivileges=false
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

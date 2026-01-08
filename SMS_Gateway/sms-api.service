@@ -1,0 +1,15 @@
+[Unit]
+Description=SMS Gateway API
+After=network.target smstools.service
+
+[Service]
+Type=simple
+User=smsd
+Group=dialout
+WorkingDirectory=/home/rom/SMS_Gateway
+ExecStart=/usr/bin/python3 /home/rom/SMS_Gateway/sms_api.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

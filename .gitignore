@@ -34,3 +34,8 @@ logs/
 # System files
 .Trash-*/
 .directory
+
+# Configuration files with secrets
+voice_config.json
+runtime_voice_config.json
+.env
