@@ -62,12 +62,17 @@ SMSTOOLS_WAS_RUNNING=false
 
 if systemctl is-active --quiet smstools; then
     SMSTOOLS_WAS_RUNNING=true
-    sudo systemctl stop smstools 2>/dev/null
-    sleep 2
+    sudo /usr/bin/systemctl stop smstools 2>/dev/null
+    sleep 5
+    # Verify SMSD actually stopped
+    for i in {1..5}; do
+        systemctl is-active --quiet smstools || break
+        sleep 1
+    done
 fi
 
 # Use ttyUSB2 (SMS port - safe to use while voice calls are active)
-AT_PORT="/dev/ttyUSB2"
+AT_PORT="/dev/ttyUSB_SIM7600_AT"  # Stable symlink to Interface 02 (auto-updated)
 
 # Check AT port responsiveness
 AT_PORT_STATUS="❌"
@@ -81,38 +86,38 @@ fi
 # Get modem details if AT port is working
 if [ "$AT_PORT_STATUS" = "✅" ]; then
     # Manufacturer
-    MFG_RESP=$(timeout 5 bash -c "echo -e 'AT+CGMI\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    MFG_RESP=$(timeout 5 bash -c "echo -e 'AT+CGMI\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     MANUFACTURER=$(echo "$MFG_RESP" | grep -v "AT+CGMI" | grep -v "OK" | grep -v "^$" | tr -d '\r\n' | head -1)
     sleep 0.3
 
     # Model
-    MODEL_RESP=$(timeout 5 bash -c "echo -e 'AT+CGMM\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    MODEL_RESP=$(timeout 5 bash -c "echo -e 'AT+CGMM\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     MODEL=$(echo "$MODEL_RESP" | grep -v "AT+CGMM" | grep -v "OK" | grep -v "^$" | tr -d '\r\n' | head -1)
     sleep 0.3
 
     # Firmware
-    FW_RESP=$(timeout 5 bash -c "echo -e 'AT+CGMR\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    FW_RESP=$(timeout 5 bash -c "echo -e 'AT+CGMR\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     FIRMWARE=$(echo "$FW_RESP" | grep -v "AT+CGMR" | grep -v "OK" | grep -v "^$" | tr -d '\r\n' | head -1)
     sleep 0.3
 
     # IMEI
-    IMEI_RESP=$(timeout 5 bash -c "echo -e 'AT+CGSN\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    IMEI_RESP=$(timeout 5 bash -c "echo -e 'AT+CGSN\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     IMEI=$(echo "$IMEI_RESP" | grep -v "AT+CGSN" | grep -v "OK" | grep -v "^$" | tr -d '\r\n' | head -1)
     sleep 0.3
 
     # IMSI
-    IMSI_RESP=$(timeout 5 bash -c "echo -e 'AT+CIMI\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    IMSI_RESP=$(timeout 5 bash -c "echo -e 'AT+CIMI\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     IMSI=$(echo "$IMSI_RESP" | grep -v "AT+CIMI" | grep -v "OK" | grep -v "^$" | tr -d '\r\n' | head -1)
     sleep 0.3
 
     # Signal strength
-    SIGNAL_RESP=$(timeout 5 bash -c "echo -e 'AT+CSQ\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    SIGNAL_RESP=$(timeout 5 bash -c "echo -e 'AT+CSQ\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     SIGNAL=$(echo "$SIGNAL_RESP" | grep "+CSQ:" | sed -n 's/.*+CSQ: \([0-9]*\),.*/\1\/31/p')
     [ -z "$SIGNAL" ] && SIGNAL="Unknown"
     sleep 0.3
 
     # SIM status
-    SIM_RESP=$(timeout 5 bash -c "echo -e 'AT+CPIN?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    SIM_RESP=$(timeout 5 bash -c "echo -e 'AT+CPIN?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     if echo "$SIM_RESP" | grep -q "READY"; then
         SIM_STATUS="✅ Ready"
     elif echo "$SIM_RESP" | grep -q "NOT INSERTED"; then
@@ -123,7 +128,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # Network registration
-    CREG_RESP=$(timeout 5 bash -c "echo -e 'AT+CREG?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    CREG_RESP=$(timeout 5 bash -c "echo -e 'AT+CREG?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     if echo "$CREG_RESP" | grep -q "+CREG: 0,1\|+CREG: 0,5"; then
         NETWORK_REG="✅ Registered"
     else
@@ -132,7 +137,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # Query APN configurations (AT+CGDCONT?)
-    CGDCONT_RESP=$(timeout 5 bash -c "echo -e 'AT+CGDCONT?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=600 2>/dev/null")
+    CGDCONT_RESP=$(timeout 5 bash -c "echo -e 'AT+CGDCONT?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=600 2>/dev/null")
 
     # Parse Data APN (context 1)
     DATA_APN_TYPE=$(echo "$CGDCONT_RESP" | grep "+CGDCONT: 1," | sed -n 's/.*+CGDCONT: 1,"\([^"]*\)".*/\1/p')
@@ -153,7 +158,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # PDP context status (both contexts)
-    CGACT_RESP=$(timeout 5 bash -c "echo -e 'AT+CGACT?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=300 2>/dev/null")
+    CGACT_RESP=$(timeout 5 bash -c "echo -e 'AT+CGACT?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=300 2>/dev/null")
 
     # Context 1 (Data)
     if echo "$CGACT_RESP" | grep -q "+CGACT: 1,1"; then
@@ -182,7 +187,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # VoLTE status
-    VOLTE_RESP=$(timeout 5 bash -c "echo -e 'AT+CEVOLTE?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    VOLTE_RESP=$(timeout 5 bash -c "echo -e 'AT+CEVOLTE?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     if echo "$VOLTE_RESP" | grep -q "+CEVOLTE: 1,1"; then
         VOLTE="✅ Enabled"
     elif echo "$VOLTE_RESP" | grep -q "ERROR"; then
@@ -193,7 +198,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # Network mode preference (AT+CNMP?)
-    CNMP_RESP=$(timeout 5 bash -c "echo -e 'AT+CNMP?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    CNMP_RESP=$(timeout 5 bash -c "echo -e 'AT+CNMP?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     if echo "$CNMP_RESP" | grep -q "+CNMP: 38"; then
         NET_PREF="✅ LTE-only (mode 38)"
     elif echo "$CNMP_RESP" | grep -q "+CNMP: 2"; then
@@ -204,7 +209,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # System information - actual network mode (AT+CPSI?)
-    CPSI_RESP=$(timeout 5 bash -c "echo -e 'AT+CPSI?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=500 2>/dev/null")
+    CPSI_RESP=$(timeout 5 bash -c "echo -e 'AT+CPSI?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=500 2>/dev/null")
     if echo "$CPSI_RESP" | grep -q "LTE"; then
         ACTUAL_MODE="✅ LTE (VoLTE ready)"
     elif echo "$CPSI_RESP" | grep -q "WCDMA"; then
@@ -217,7 +222,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # Network system mode (AT+CNSMOD?)
-    CNSMOD_RESP=$(timeout 5 bash -c "echo -e 'AT+CNSMOD?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    CNSMOD_RESP=$(timeout 5 bash -c "echo -e 'AT+CNSMOD?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     if echo "$CNSMOD_RESP" | grep -q "+CNSMOD: 0,8\|+CNSMOD: 1,8"; then
         NETWORK_TECH="LTE"
     elif echo "$CNSMOD_RESP" | grep -q "+CNSMOD: 0,7\|+CNSMOD: 1,7"; then
@@ -234,7 +239,7 @@ if [ "$AT_PORT_STATUS" = "✅" ]; then
     sleep 0.3
 
     # EPS registration status (AT+CEREG?)
-    CEREG_RESP=$(timeout 5 bash -c "echo -e 'AT+CEREG?\r' > $AT_PORT; sleep 0.5; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
+    CEREG_RESP=$(timeout 5 bash -c "echo -e 'AT+CEREG?\r' > $AT_PORT; sleep 1; dd if=$AT_PORT bs=1 count=200 2>/dev/null")
     if echo "$CEREG_RESP" | grep -q "+CEREG: 0,1"; then
         EPS_STATUS="✅ Registered (home network)"
     elif echo "$CEREG_RESP" | grep -q "+CEREG: 0,5"; then
@@ -266,7 +271,7 @@ fi
 
 # Restart SMSTools if it was running
 if [ "$SMSTOOLS_WAS_RUNNING" = true ]; then
-    sudo systemctl start smstools
+    sudo /usr/bin/systemctl start smstools
 fi
 
 # Build comprehensive status message
@@ -303,13 +308,64 @@ STATUS_MSG+="• IMS APN: ${IMS_APN_NAME:-$IMS_APN} (${IMS_TYPE_STATUS:-Unknown}
 STATUS_MSG+="• VoLTE: ${VOLTE}"$'\n'
 STATUS_MSG+=""$'\n'
 STATUS_MSG+="**🔌 Connectivity:**"$'\n'
-STATUS_MSG+="• AT Port: ${AT_PORT_STATUS} (${AT_PORT})"$'\n'
+# Resolve symlink to show actual device
+REAL_AT_PORT=$(readlink -f "$AT_PORT" 2>/dev/null || echo "$AT_PORT")
+REAL_AT_DEVICE=$(basename "$REAL_AT_PORT")
+STATUS_MSG+="• AT Port: ${AT_PORT_STATUS} (${REAL_AT_DEVICE} via ${AT_PORT})"$'\n'
 STATUS_MSG+="• Internet: ${INTERNET} (Ping: ${PING_TIME})"$'\n'
 STATUS_MSG+="• wwan0: ${WWAN0_STATUS} (${WWAN0_IP})"$'\n'
 STATUS_MSG+=""$'\n'
 STATUS_MSG+="**⚙️ Services:**"$'\n'
 STATUS_MSG+="• SMSTools: ${SMSTOOLS_STATUS}"$'\n'
-STATUS_MSG+="• Voice Bot: ${VOICEBOT_STATUS}"
+STATUS_MSG+="• Voice Bot: ${VOICEBOT_STATUS}"$'\n'
+STATUS_MSG+=""$'\n'
+
+# Check STT Server (Parakeet) status
+STT_STATUS="❌ Stopped"
+STT_MODEL="Unknown"
+STT_HEALTH="N/A"
+
+if docker ps --format "{{.Image}}" 2>/dev/null | grep -q "parakeet-server"; then
+    STT_HEALTH_RESP=$(curl -s --connect-timeout 2 --max-time 3 http://localhost:9001/health 2>/dev/null)
+    if [ $? -eq 0 ] && [ -n "$STT_HEALTH_RESP" ]; then
+        STT_STATUS="✅ Running"
+        STT_MODEL=$(echo "$STT_HEALTH_RESP" | jq -r '.model // "Unknown"' 2>/dev/null || echo "Parakeet")
+        STT_HEALTH=$(echo "$STT_HEALTH_RESP" | jq -r '.status // "Unknown"' 2>/dev/null || echo "unknown")
+    else
+        STT_STATUS="⚠️ Container running but no response"
+    fi
+fi
+
+# Check VPS SMS Server connectivity
+VPS_SMS_STATUS="❌ Unreachable"
+VPS_SMS_RESPONSE="N/A"
+VPS_ENDPOINT="http://10.100.0.1:5000/api/health"
+
+# Try health endpoint first, fallback to checking if port is open
+VPS_CHECK=$(curl -s --connect-timeout 3 --max-time 5 "$VPS_ENDPOINT" 2>/dev/null)
+if [ $? -eq 0 ] && [ -n "$VPS_CHECK" ]; then
+    VPS_SMS_STATUS="✅ OK"
+    VPS_SMS_RESPONSE=$(echo "$VPS_CHECK" | jq -r '.status // "healthy"' 2>/dev/null || echo "responding")
+else
+    # Fallback: check if main API endpoint is reachable
+    VPS_MAIN=$(curl -s --connect-timeout 3 --max-time 5 -w "%{http_code}" "http://10.100.0.1:5000/api/send" 2>/dev/null | tail -1)
+    if [ "$VPS_MAIN" = "405" ] || [ "$VPS_MAIN" = "400" ] || [ "$VPS_MAIN" = "200" ]; then
+        VPS_SMS_STATUS="✅ Reachable"
+        VPS_SMS_RESPONSE="HTTP $VPS_MAIN"
+    else
+        VPS_SMS_STATUS="❌ No response"
+        VPS_SMS_RESPONSE="Timeout or connection failed"
+    fi
+fi
+
+STATUS_MSG+="**🎙️ STT Service:**"$'\n'
+STATUS_MSG+="• Server Status: ${STT_STATUS}"$'\n'
+STATUS_MSG+="• Model: ${STT_MODEL}"$'\n'
+STATUS_MSG+="• Health: ${STT_HEALTH}"$'\n'
+STATUS_MSG+=""$'\n'
+STATUS_MSG+="**🔗 VPS SMS Server:**"$'\n'
+STATUS_MSG+="• Connectivity: ${VPS_SMS_STATUS}"$'\n'
+STATUS_MSG+="• Response: ${VPS_SMS_RESPONSE}"
 
 # Send to VPS
 /home/rom/pi_send_message.sh "$STATUS_MSG" "info"

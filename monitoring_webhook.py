@@ -177,7 +177,8 @@ def show_help():
             '/monitor/service/<name>': 'Check specific service status',
             '/monitor/services': 'List all available services',
             '/monitor/logs': 'Check for recent errors and service restarts (async)',
-            '/monitor/logs/sync': 'Check logs (sync - returns full output)'
+            '/monitor/logs/sync': 'Check logs (sync - returns full output)',
+            '/monitor/modem_reset': 'Software reset modem via USB unbind/bind (async)'
         },
         'methods': ['GET', 'POST'],
         'note': 'All endpoints support both GET and POST methods. /sync endpoints return full output in HTTP response.'
@@ -199,6 +200,30 @@ def list_services():
             'status': 'success',
             'action': 'services',
             'message': 'Services status check started in background'
+        })
+
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/monitor/modem_reset', methods=['POST', 'GET'])
+def modem_reset():
+    """Reset the modem via USB unbind/bind (software reset)"""
+    try:
+        # Start modem reset script in background thread
+        thread = threading.Thread(
+            target=run_monitoring_async,
+            args=('/home/rom/modem_usb_reset.sh', []),
+            daemon=True
+        )
+        thread.start()
+
+        return jsonify({
+            'status': 'success',
+            'action': 'modem_reset',
+            'message': 'Modem USB reset started in background. Check logs at /var/log/modem_usb_reset.log'
         })
 
     except Exception as e:

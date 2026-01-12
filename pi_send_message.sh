@@ -37,6 +37,34 @@ send_notification() {
     # Build JSON payload using jq for proper escaping
     local hostname_with_ip="$HOSTNAME [$VPN_IP]"
 
+    # Check if jq is installed
+    if ! command -v jq &> /dev/null; then
+        # jq is not installed - send manual JSON with warning
+        logger -t pi_send_message "WARNING: jq not installed - sending manually formatted JSON"
+
+        # Escape basic characters for JSON (not perfect but works for most cases)
+        local escaped_message=$(echo "$message" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ')
+
+        local fallback_warning="WARNING: jq JSON parser is not installed on $hostname_with_ip. Install with: sudo apt install -y jq | Original message: $escaped_message"
+
+        # Create simple JSON manually (not as robust as jq but works)
+        local json_payload="{\"hostname\":\"$hostname_with_ip\",\"service\":\"$SERVICE\",\"severity\":\"warning\",\"message\":\"$fallback_warning\"}"
+
+        # Send the notification
+        local response=$(curl -s -w "\n%{http_code}" -X POST "$API_URL" \
+            -H "Content-Type: application/json" \
+            -d "$json_payload" \
+            --connect-timeout 10 \
+            --max-time 60)
+
+        local http_code=$(echo "$response" | tail -1)
+        local body=$(echo "$response" | sed '$d')
+
+        logger -t pi_send_message "Fallback JSON sent - VPS Response: HTTP $http_code - $body"
+        echo "$body"
+        return
+    fi
+
     # Use jq to build proper JSON - handles all special characters correctly
     local json_payload=$(jq -n \
         --arg hostname "$hostname_with_ip" \
@@ -246,7 +274,7 @@ get_listening_ports() {
 # Get critical services status
 get_services_status() {
     local services_info=""
-    
+
     # Check unified-modem service (handles both SMS and Voice)
     if systemctl is-active --quiet unified-modem 2>/dev/null; then
         services_info="Voice/SMS: ✓ Running"
@@ -255,22 +283,57 @@ get_services_status() {
     else
         services_info="Voice: ✗ Stopped"
     fi
-    
+
     # Check SMS API
     if systemctl is-active --quiet sms-api 2>/dev/null; then
         services_info="${services_info} | SMS API: ✓ Running"
     else
         services_info="${services_info} | SMS API: ✗ Stopped"
     fi
-    
-    # Check for PJSUA process
-    if pgrep -x pjsua >/dev/null 2>&1; then
-        services_info="${services_info} | PJSUA: ✓ Active"
-    else
-        services_info="${services_info} | PJSUA: ✗ Inactive"
+
+    # Check STT Server (Parakeet)
+    local stt_status="✗ Stopped"
+    local stt_name="Unknown"
+
+    # Check if Parakeet container is running
+    if docker ps --format "{{.Image}}" 2>/dev/null | grep -q "parakeet-server"; then
+        # Try to get server name from health endpoint
+        local health_response=$(curl -s --connect-timeout 2 --max-time 3 http://localhost:9001/health 2>/dev/null)
+        if [ $? -eq 0 ] && [ -n "$health_response" ]; then
+            stt_name=$(echo "$health_response" | jq -r '.model // "Parakeet"' 2>/dev/null || echo "Parakeet")
+            stt_status="✓ Running"
+        else
+            stt_name="Parakeet"
+            stt_status="⚠ No Response"
+        fi
     fi
-    
+
+    services_info="${services_info} | STT Server: $stt_status ($stt_name)"
+
     echo "$services_info"
+}
+
+# Get simple modem status (model and USB port)
+get_modem_status() {
+    local modem_model="Not Detected"
+    local usb_ports="N/A"
+
+    # Check for SIM7600
+    if lsusb | grep -q "1e0e:9011\|1e0e:9001"; then
+        modem_model="SIM7600G-H"
+    # Check for EC25
+    elif lsusb | grep -q "2c7c:0125"; then
+        modem_model="EC25-AUX"
+    fi
+
+    # Get USB port count
+    if ls /dev/ttyUSB* 2>/dev/null | grep -q ttyUSB; then
+        local port_count=$(ls -1 /dev/ttyUSB* 2>/dev/null | wc -l)
+        local port_list=$(ls /dev/ttyUSB* 2>/dev/null | xargs -n1 basename | tr '\n' ',' | sed 's/,$//')
+        usb_ports="$port_count ports ($port_list)"
+    fi
+
+    echo "**Modem Detected:** Model: $modem_model | USB PORT: $usb_ports"
 }
 
 # Get running processes (top 10 by CPU) with more details, excluding temporary processes
@@ -316,10 +379,10 @@ comprehensive_system_check() {
         vpn_ip="No VPN"
     fi
     local default_gw=$(ip route | grep default | awk '{print $3}' | head -1 || echo "No GW")
-    
-    # EC25 status (with timeout protection)
-    local ec25_status=$(get_ec25_status)
-    
+
+    # Modem status (simple detection)
+    local modem_status=$(get_modem_status)
+
     # Services status
     local services_status=$(get_services_status)
     
@@ -337,7 +400,7 @@ comprehensive_system_check() {
     # Build message piece by piece without heredoc indentation
     message+="**System Report** - CPU: ${cpu_usage}% @ ${cpu_temp}°C | Mem: ${mem_info} | Disk: ${disk_usage}"$'\n'
     message+="**Local Network:** Host: ${system_hostname} (${avahi_hostname}.local) | IP: ${ip_info} | GW: ${default_gw} | VPN: <blue>**${vpn_ip}**</blue>"$'\n'
-    message+="${ec25_status}"$'\n'
+    message+="${modem_status}"$'\n'
     message+="**Services:** ${services_status}"$'\n'
     message+="**=== Listening Ports ===**"$'\n'
     message+="${ports}"$'\n'

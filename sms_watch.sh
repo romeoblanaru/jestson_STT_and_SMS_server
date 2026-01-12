@@ -123,7 +123,16 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
     elif [[ "$line" =~ "The modem answer was not OK" ]] && [[ "$line" =~ "CMS ERROR" ]]; then
         error=$(echo "$line" | grep -oE 'CMS ERROR: [^$]+' || echo "Unknown error")
         msg="[$time] ${RED}✗ MODEM ERROR${RESET} to  - ${RED}$error${RESET}"
-        
+
+    # FAILED SMS - Moved to failed directory
+    elif [[ "$line" =~ "Moved file".*/var/spool/sms/checked/.*"to /var/spool/sms/failed/" ]]; then
+        recipient=$(echo "$line" | grep -oE 'To: [0-9+]+' | sed 's/To: //')
+        filename=$(echo "$line" | grep -oE 'failed/[^ ]+' | sed 's|failed/||')
+        if [[ -z "$recipient" ]]; then
+            recipient="unknown"
+        fi
+        msg="[$time] ${RED}✗✗ SEND FAILED${RESET} to ${YELLOW}$recipient${RESET} - moved to ${RED}failed/${RESET} (${filename})"
+
     # Webhook received
     elif [[ "$line" =~ "POST /send" ]] && [[ "$line" =~ "10.100.0.1" ]]; then
         msg="[$time] ${GREEN}↓ RECEIVED${RESET} message from VPS"

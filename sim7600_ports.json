@@ -1,10 +1,10 @@
 {
-  "config_port": "/dev/ttyUSB3",
+  "config_port": "/dev/ttyUSB_SIM7600_AT",
   "nmea": "/dev/ttyUSB1",
-  "sms_port": "/dev/ttyUSB2",
-  "at_command": "/dev/ttyUSB3",
-  "audio": "/dev/ttyUSB4",
-  "apn": "pp.vodafone.co.uk",
+  "sms_port": "/dev/ttyUSB_SIM7600_AT",
+  "at_command": "/dev/ttyUSB_SIM7600_VOICE",
+  "audio": "/dev/ttyUSB_SIM7600_AUDIO",
+  "apn": "internet",
   "ims_apn": "ims",
-  "carrier": "Vodafone UK"
+  "carrier": "O2 UK / giffgaff"
 }

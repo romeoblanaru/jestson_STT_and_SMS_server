@@ -138,31 +138,33 @@ class SIM7600Detector:
         # SIM7600 port layout (USB composition 9001 - stable mode for voice):
         # ttyUSB0 - Diagnostics (causes broken pipe, DO NOT USE!)
         # ttyUSB1 - GPS/NMEA
-        # ttyUSB2 - AT Commands (SMSTools - locked during SMS operations)
-        # ttyUSB3 - AT Commands (MAIN PORT - reliable for configuration + voice)
+        # ttyUSB2 - AT Commands (SMSTools - also used for configuration via symlink)
+        # ttyUSB3 - AT Commands (Voice bot ONLY - avoid during configuration)
         # ttyUSB4 - PCM Audio (8kHz raw audio during calls)
         # wwan0 - Internet (QMI interface, NOT serial port)
+
+        # Use symlinks for bulletproof port mapping (survives USB enumeration changes)
         self.port_mapping = {
-            'config_port': devices[3] if len(devices) > 3 else None,  # ttyUSB3 - Main AT port
+            'config_port': '/dev/ttyUSB_SIM7600_AT',      # ttyUSB2 via symlink - for configuration
             'nmea': devices[1] if len(devices) > 1 else None,         # ttyUSB1 - GPS
-            'sms_port': devices[2] if len(devices) > 2 else None,     # ttyUSB2 - SMSTools
-            'at_command': devices[3] if len(devices) > 3 else None,   # ttyUSB3 - Voice bot (same as config)
-            'audio': devices[4] if len(devices) > 4 else None,        # ttyUSB4 - PCM audio
+            'sms_port': '/dev/ttyUSB_SIM7600_AT',         # ttyUSB2 via symlink - for SMSTools
+            'at_command': '/dev/ttyUSB_SIM7600_VOICE',    # ttyUSB3 via symlink - Voice bot ONLY
+            'audio': '/dev/ttyUSB_SIM7600_AUDIO',         # ttyUSB4 via symlink - PCM audio
         }
 
-        # Verify critical ports
+        # Verify critical ports exist
         config_port = self.port_mapping['config_port']
-        if not config_port:
-            logger.error("No AT command port (ttyUSB3) found")
+        if not os.path.exists(config_port):
+            logger.error(f"Configuration port {config_port} not found")
             return False
 
         voice_port = self.port_mapping['at_command']
-        if not voice_port:
-            logger.error("No voice AT port (ttyUSB3) found")
+        if not os.path.exists(voice_port):
+            logger.error(f"Voice port {voice_port} not found")
             return False
 
-        # CRITICAL: Stop smstools before configuration (just for safety)
-        # We use ttyUSB3 for configuration (no conflict), but stop SMSTools anyway
+        # CRITICAL: Stop smstools before configuration
+        # We use ttyUSB2 (via symlink) which SMSTools also uses, so must stop it first
         smstools_was_running = self.stop_smstools_temporarily()
 
         # STEP 0: Verify/Set USB composition to 9001 (stable mode for voice)
@@ -219,21 +221,30 @@ class SIM7600Detector:
 
         # Continue with modem verification
         try:
+            logger.info(f"🔍 DEBUG: Attempting to open serial port: {config_port}")
 
             with serial.Serial(config_port, 115200, timeout=2, write_timeout=2) as ser:
+                logger.info(f"✅ DEBUG: Serial port opened successfully")
+
                 # Test AT commands to confirm it's SIM7600
+                logger.info(f"📤 DEBUG: Sending AT command...")
                 ser.write(b"AT\r\n")
                 time.sleep(1)
                 response = ser.read(100).decode('utf-8', errors='ignore')
+                logger.info(f"📥 DEBUG: AT response: [{response.strip()}]")
 
                 if "OK" not in response:
-                    logger.debug(f"No OK response from {config_port}")
+                    logger.warning(f"❌ DEBUG: No OK response from {config_port}, got: [{response.strip()}]")
                     return False
 
+                logger.info(f"✅ DEBUG: AT command OK, checking manufacturer...")
+
                 # Check manufacturer
+                logger.info(f"📤 DEBUG: Sending AT+CGMI...")
                 ser.write(b"AT+CGMI\r\n")
                 time.sleep(1)
                 response = ser.read(100).decode('utf-8', errors='ignore')
+                logger.info(f"📥 DEBUG: AT+CGMI response: [{response.strip()}]")
 
                 if "SIMCOM" in response or "SIM7600" in response:
                     logger.info("✅ SIM7600 confirmed via AT commands")
@@ -243,11 +254,13 @@ class SIM7600Detector:
 
                     return True
                 else:
-                    logger.debug(f"Not a SIM7600: {response}")
+                    logger.warning(f"❌ DEBUG: Not a SIM7600, response: [{response.strip()}]")
                     return False
 
         except Exception as e:
-            logger.error(f"Error verifying SIM7600: {e}")
+            logger.error(f"❌ DEBUG: Exception during verification: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"DEBUG: Traceback: {traceback.format_exc()}")
             return False
         finally:
             # NOTE: We do NOT restart smstools here anymore
@@ -632,10 +645,10 @@ class SIM7600Detector:
             logger.info("Saving APN info to port mapping...")
             self.save_port_mapping()
 
-            # Use ttyUSB0 for configuration (dedicated config port, no conflicts)
+            # Use ttyUSB2 via symlink for configuration (SMSTools must be stopped first)
             config_port = self.port_mapping.get('config_port')
             if not config_port:
-                logger.error("No config port (ttyUSB0) available for internet configuration")
+                logger.error("No config port (ttyUSB_SIM7600_AT) available for internet configuration")
                 return False
 
             try:
@@ -684,74 +697,86 @@ class SIM7600Detector:
                     time.sleep(10)  # Increased from 7s to 10s
 
                     # Step 5: Activate PDP contexts (HIGH POWER - EMI risk)
-                    # Activate context 1 (Data APN - internet)
-                    logger.info("⚡ Step 5a: Activating Data PDP context (AT+CGACT=1,1)...")
-                    logger.warning("   ⚠️ HIGH POWER TRANSMISSION - watch for EMI!")
-                    ser.reset_input_buffer()
-                    ser.write(b"AT+CGACT=1,1\r\n")
-                    time.sleep(3)  # Increased from 1s to 3s
-                    response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
+                    # CHECK: Skip PDP activation if disabled (for SMS-only operation)
+                    skip_pdp = os.getenv('SKIP_PDP_ACTIVATION', 'false').lower() == 'true'
 
-                    if "OK" in response:
-                        logger.info("✅ Data PDP context activated (context 1)")
+                    if skip_pdp:
+                        logger.info("⏭️ Step 5: Skipping PDP activation (SKIP_PDP_ACTIVATION=true)")
+                        logger.info("   ℹ️ PDP contexts disabled for SMS stability")
+                        logger.info("   ℹ️ Re-enable for voice bot or backup internet testing")
                     else:
-                        logger.warning(f"⚠️ Data context activation response: {response}")
+                        # Activate context 1 (Data APN - internet)
+                        logger.info("⚡ Step 5a: Activating Data PDP context (AT+CGACT=1,1)...")
+                        logger.warning("   ⚠️ HIGH POWER TRANSMISSION - watch for EMI!")
+                        ser.reset_input_buffer()
+                        ser.write(b"AT+CGACT=1,1\r\n")
+                        time.sleep(3)  # Increased from 1s to 3s
+                        response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
 
-                    # Wait for context 1 to settle
-                    time.sleep(2)
+                        if "OK" in response:
+                            logger.info("✅ Data PDP context activated (context 1)")
+                        else:
+                            logger.warning(f"⚠️ Data context activation response: {response}")
 
-                    # Step 5b: Activate context 2 (IMS APN - required for VoLTE)
-                    logger.info("⚡ Step 5b: Activating IMS PDP context (AT+CGACT=1,2)...")
-                    ser.reset_input_buffer()
-                    ser.write(b"AT+CGACT=1,2\r\n")
-                    time.sleep(3)
-                    response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
+                        # Wait for context 1 to settle
+                        time.sleep(2)
 
-                    if "OK" in response:
-                        logger.info("✅ IMS PDP context activated (context 2) - VoLTE ready!")
-                    else:
-                        logger.warning(f"⚠️ IMS context activation failed: {response}")
-                        logger.warning("   VoLTE may not work without IMS context active")
+                        # Step 5b: Activate context 2 (IMS APN - required for VoLTE)
+                        logger.info("⚡ Step 5b: Activating IMS PDP context (AT+CGACT=1,2)...")
+                        ser.reset_input_buffer()
+                        ser.write(b"AT+CGACT=1,2\r\n")
+                        time.sleep(3)
+                        response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
 
-                    # Wait for both contexts to settle
-                    time.sleep(3)
+                        if "OK" in response:
+                            logger.info("✅ IMS PDP context activated (context 2) - VoLTE ready!")
+                        else:
+                            logger.warning(f"⚠️ IMS context activation failed: {response}")
+                            logger.warning("   VoLTE may not work without IMS context active")
+
+                        # Wait for both contexts to settle
+                        time.sleep(3)
 
                     # Step 6: Check and Enable VoLTE (CRITICAL - must be AFTER PDP context activation!)
-                    # 2G/3G networks being deprecated across Europe (UK: 2025)
-                    logger.info("⚡ Step 6: Checking VoLTE status...")
-
-                    # First query current VoLTE status
-                    ser.reset_input_buffer()
-                    ser.write(b"AT+CEVOLTE?\r\n")
-                    time.sleep(1)
-                    query_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
-                    logger.info(f"   VoLTE query response: {query_response.strip()}")
-
-                    # Try to enable VoLTE
-                    ser.reset_input_buffer()
-                    ser.write(b"AT+CEVOLTE=1,1\r\n")
-                    time.sleep(2)
-                    enable_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
-
-                    if "OK" in enable_response:
-                        logger.info("✅ VoLTE enabled successfully via AT+CEVOLTE=1,1")
-                        self.modem_details['volte'] = "✅ Enabled"
-                    elif "ERROR" in enable_response:
-                        # ERROR might mean already enabled or not supported
-                        if "+CEVOLTE: 1,1" in query_response:
-                            logger.info("✅ VoLTE already enabled (query shows 1,1)")
-                            self.modem_details['volte'] = "✅ Already enabled"
-                        elif "ERROR" in query_response:
-                            logger.warning("⚠️ VoLTE commands not supported by modem/firmware")
-                            logger.warning("   Network may enable VoLTE automatically when IMS APN is configured")
-                            self.modem_details['volte'] = "⚠️ Not supported (auto-enabled by network?)"
-                        else:
-                            logger.warning(f"⚠️ VoLTE enable failed: {enable_response.strip()}")
-                            logger.warning("   This may be normal - some carriers enable VoLTE automatically")
-                            self.modem_details['volte'] = "⚠️ Not confirmed"
+                    if skip_pdp:
+                        logger.info("⏭️ Step 6: Skipping VoLTE check (PDP activation disabled)")
+                        self.modem_details['volte'] = "❌ Disabled (SMS-only mode)"
                     else:
-                        logger.warning(f"⚠️ Unexpected VoLTE response: {enable_response.strip()}")
-                        self.modem_details['volte'] = "⚠️ Unknown"
+                        # 2G/3G networks being deprecated across Europe (UK: 2025)
+                        logger.info("⚡ Step 6: Checking VoLTE status...")
+
+                        # First query current VoLTE status
+                        ser.reset_input_buffer()
+                        ser.write(b"AT+CEVOLTE?\r\n")
+                        time.sleep(1)
+                        query_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
+                        logger.info(f"   VoLTE query response: {query_response.strip()}")
+
+                        # Try to enable VoLTE
+                        ser.reset_input_buffer()
+                        ser.write(b"AT+CEVOLTE=1,1\r\n")
+                        time.sleep(2)
+                        enable_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
+
+                        if "OK" in enable_response:
+                            logger.info("✅ VoLTE enabled successfully via AT+CEVOLTE=1,1")
+                            self.modem_details['volte'] = "✅ Enabled"
+                        elif "ERROR" in enable_response:
+                            # ERROR might mean already enabled or not supported
+                            if "+CEVOLTE: 1,1" in query_response:
+                                logger.info("✅ VoLTE already enabled (query shows 1,1)")
+                                self.modem_details['volte'] = "✅ Already enabled"
+                            elif "ERROR" in query_response:
+                                logger.warning("⚠️ VoLTE commands not supported by modem/firmware")
+                                logger.warning("   Network may enable VoLTE automatically when IMS APN is configured")
+                                self.modem_details['volte'] = "⚠️ Not supported (auto-enabled by network?)"
+                            else:
+                                logger.warning(f"⚠️ VoLTE enable failed: {enable_response.strip()}")
+                                logger.warning("   This may be normal - some carriers enable VoLTE automatically")
+                                self.modem_details['volte'] = "⚠️ Not confirmed"
+                        else:
+                            logger.warning(f"⚠️ Unexpected VoLTE response: {enable_response.strip()}")
+                            self.modem_details['volte'] = "⚠️ Unknown"
 
                     # Step 7: Force LTE-only mode to prevent 3G fallback during calls
                     # CRITICAL: Without this, modem falls back to 3G (CSFB) during voice calls
@@ -788,139 +813,198 @@ class SIM7600Detector:
                         self.modem_details['network_mode'] = "Unknown (AT+CNMP=38 failed)"
 
                 # Wait for modem to stabilize after network mode change
-                logger.info("⏳ Waiting 5 seconds for modem to stabilize after LTE-only mode change...")
-                time.sleep(5)
+                logger.info("⏳ Waiting 15 seconds for modem to stabilize after LTE-only mode change...")
+                time.sleep(15)
 
-                # Step 8: Verify network mode and registration status
-                logger.info("⚡ Step 8: Verifying network status...")
+            except serial.SerialException as e:
+                logger.error(f"Serial communication error during initial configuration: {e}")
+                return False
 
-                # Check system information (network mode, band, signal)
-                ser.reset_input_buffer()
-                ser.write(b"AT+CPSI?\r\n")
-                time.sleep(1)
-                cpsi_response = ser.read(ser.in_waiting or 500).decode('utf-8', errors='ignore')
-                logger.info(f"   📡 System Info (AT+CPSI?): {cpsi_response.strip()}")
+            # CRITICAL: AT+CNMP=38 causes modem to disconnect/reconnect, closing serial port
+            # We must exit the 'with' block to close the port properly, then reopen it
+            logger.info("🔄 Waiting 5 seconds for USB port to re-enumerate after network mode change...")
+            time.sleep(5)
 
-                # Parse system mode from CPSI response
-                if "LTE" in cpsi_response:
-                    actual_mode = "✅ LTE (VoLTE ready)"
-                elif "WCDMA" in cpsi_response:
-                    actual_mode = "⚠️ WCDMA (3G - VoLTE NOT available)"
-                elif "GSM" in cpsi_response:
-                    actual_mode = "⚠️ GSM (2G - VoLTE NOT available)"
-                else:
-                    actual_mode = "❓ Unknown"
+            # Retry opening serial port up to 3 times (modem might need extra time)
+            port_opened = False
+            for retry in range(3):
+                try:
+                    logger.info(f"🔄 Reopening serial port (attempt {retry + 1}/3)...")
+                    ser_test = serial.Serial(config_port, 115200, timeout=3, write_timeout=1)
+                    ser_test.close()
+                    port_opened = True
+                    logger.info("✅ Serial port ready!")
+                    break
+                except serial.SerialException as e:
+                    if retry < 2:
+                        logger.warning(f"⚠️ Port not ready yet, waiting 5 more seconds... ({e})")
+                        time.sleep(5)
+                    else:
+                        logger.error(f"❌ Failed to reopen serial port after 3 attempts: {e}")
+                        return False
 
-                # Check network system mode (detailed mode info)
-                ser.reset_input_buffer()
-                ser.write(b"AT+CNSMOD?\r\n")
-                time.sleep(1)
-                cnsmod_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
-                logger.info(f"   📡 Network Mode (AT+CNSMOD?): {cnsmod_response.strip()}")
+            if not port_opened:
+                logger.error("❌ Serial port failed to open after network mode change")
+                return False
 
-                # Parse CNSMOD: 8=LTE, 7=HSPA, 4=WCDMA, 2=GPRS, 1=GSM
-                if "+CNSMOD: 0,8" in cnsmod_response or "+CNSMOD: 1,8" in cnsmod_response:
-                    network_tech = "LTE"
-                elif "+CNSMOD: 0,7" in cnsmod_response or "+CNSMOD: 1,7" in cnsmod_response:
-                    network_tech = "HSPA (3G+)"
-                elif "+CNSMOD: 0,4" in cnsmod_response or "+CNSMOD: 1,4" in cnsmod_response:
-                    network_tech = "WCDMA (3G)"
-                elif "+CNSMOD: 0,2" in cnsmod_response or "+CNSMOD: 1,2" in cnsmod_response:
-                    network_tech = "GPRS (2.5G)"
-                elif "+CNSMOD: 0,1" in cnsmod_response or "+CNSMOD: 1,1" in cnsmod_response:
-                    network_tech = "GSM (2G)"
-                else:
-                    network_tech = "Unknown"
+            # Reopen serial port for Step 8 verification and Step 9 save
+            try:
+                with serial.Serial(config_port, 115200, timeout=3, write_timeout=1) as ser:
+                    # Test port is working
+                    logger.info("🔍 Testing serial port after reopen...")
+                    ser.reset_input_buffer()
+                    ser.write(b"AT\r\n")
+                    time.sleep(0.5)
+                    at_test = ser.read(ser.in_waiting or 100).decode('utf-8', errors='ignore')
+                    if "OK" not in at_test:
+                        logger.error(f"⚠️ Serial port test failed after reopen: {at_test}")
+                        return False
+                    logger.info("✅ Serial port working after reopen")
 
-                # Check EPS (LTE) registration status
-                ser.reset_input_buffer()
-                ser.write(b"AT+CEREG?\r\n")
-                time.sleep(1)
-                cereg_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
-                logger.info(f"   📡 EPS Registration (AT+CEREG?): {cereg_response.strip()}")
+                    # Step 8: Verify network mode and registration status
+                    logger.info("⚡ Step 8: Verifying network status...")
 
-                # Parse CEREG: 1=registered home, 5=registered roaming
-                if "+CEREG: 0,1" in cereg_response or "+CEREG: 0,5" in cereg_response:
-                    eps_status = "✅ Registered (VoLTE available)"
-                else:
-                    eps_status = "❌ Not registered (VoLTE unavailable)"
+                    # Check system information (network mode, band, signal)
+                    ser.reset_input_buffer()
+                    ser.write(b"AT+CPSI?\r\n")
+                    time.sleep(1)
+                    cpsi_response = ser.read(ser.in_waiting or 500).decode('utf-8', errors='ignore')
+                    logger.info(f"   📡 System Info (AT+CPSI?): {cpsi_response.strip()}")
 
-                # Step 8b: Verify APN configurations (CGDCONT)
-                logger.info("⚡ Verifying APN configurations (AT+CGDCONT?)...")
-                ser.reset_input_buffer()
-                ser.write(b"AT+CGDCONT?\r\n")
-                time.sleep(1)
-                cgdcont_response = ser.read(ser.in_waiting or 600).decode('utf-8', errors='ignore')
+                    # Parse system mode from CPSI response
+                    if "LTE" in cpsi_response:
+                        actual_mode = "✅ LTE (VoLTE ready)"
+                    elif "WCDMA" in cpsi_response:
+                        actual_mode = "⚠️ WCDMA (3G - VoLTE NOT available)"
+                    elif "GSM" in cpsi_response:
+                        actual_mode = "⚠️ GSM (2G - VoLTE NOT available)"
+                    else:
+                        actual_mode = "❓ Unknown"
 
-                # Parse APN configurations
-                data_apn_type = "Unknown"
-                ims_apn_type = "Unknown"
-                data_apn_configured = False
-                ims_apn_configured = False
-
-                for line in cgdcont_response.split('\n'):
-                    if '+CGDCONT: 1,' in line:
-                        if 'IP","' in line:
-                            data_apn_type = "IP"
-                        elif 'IPV4V6","' in line:
-                            data_apn_type = "IPV4V6"
-                        data_apn_configured = True
-                        logger.info(f"   ✅ Context 1 (Data): {data_apn} ({data_apn_type})")
-                    elif '+CGDCONT: 2,' in line:
-                        if 'IPV4V6","' in line:
-                            ims_apn_type = "✅ IPV4V6 (correct)"
-                        elif 'IP","' in line:
-                            ims_apn_type = "⚠️ IP (should be IPV4V6!)"
-                        ims_apn_configured = True
-                        logger.info(f"   ✅ Context 2 (IMS): {ims_apn} ({ims_apn_type})")
-
-                # Step 8c: Verify PDP context activation (CGACT)
-                logger.info("⚡ Verifying PDP context activation (AT+CGACT?)...")
-                ser.reset_input_buffer()
-                ser.write(b"AT+CGACT?\r\n")
-                time.sleep(1)
-                cgact_response = ser.read(ser.in_waiting or 300).decode('utf-8', errors='ignore')
-
-                # Parse context activation status
-                ctx1_active = "+CGACT: 1,1" in cgact_response
-                ctx2_active = "+CGACT: 2,1" in cgact_response
-
-                if ctx1_active:
-                    logger.info(f"   ✅ Context 1 (Data): ACTIVE")
-                else:
-                    logger.warning(f"   ⚠️ Context 1 (Data): INACTIVE")
-
-                if ctx2_active:
-                    logger.info(f"   ✅ Context 2 (IMS): ACTIVE - VoLTE ready!")
-                else:
-                    logger.warning(f"   ⚠️ Context 2 (IMS): INACTIVE - VoLTE may not work!")
-
-                # Store IMS/PDP status
-                self.modem_details['ctx1_active'] = ctx1_active
-                self.modem_details['ctx2_active'] = ctx2_active
-                self.modem_details['data_apn_type'] = data_apn_type
-                self.modem_details['ims_apn_type'] = ims_apn_type
-
-                # Internet configuration complete!
-                # USB composition 9001 uses wwan0 (QMI) for data, not PPP
-                # Internet monitor will use wwan0 with qmicli when primary internet fails
-                logger.info(f"✅ Modem configured for internet via wwan0 (QMI)")
-                logger.info(f"   Data APN: {data_apn}, IMS APN: {ims_apn}")
-                logger.info(f"   PDP context activated - ready for VoLTE")
-                logger.info(f"   VoLTE: {self.modem_details['volte']}")
-                logger.info(f"   Network Mode: {actual_mode} ({network_tech})")
-                logger.info(f"   EPS Status: {eps_status}")
-                logger.info(f"   Backup internet: internet-monitor will use wwan0 when WiFi fails")
-
-                # Store network status in modem details
-                self.modem_details['actual_network_mode'] = actual_mode
-                self.modem_details['network_tech'] = network_tech
-                self.modem_details['eps_status'] = eps_status
-
-                self.modem_internet['interface'] = 'wwan0 (QMI)'
-                self.modem_internet['ip'] = 'Ready (internet-monitor will activate)'
-
-                return True
+                    # Check network system mode (detailed mode info)
+                    ser.reset_input_buffer()
+                    ser.write(b"AT+CNSMOD?\r\n")
+                    time.sleep(1)
+                    cnsmod_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
+                    logger.info(f"   📡 Network Mode (AT+CNSMOD?): {cnsmod_response.strip()}")
+    
+                    # Parse CNSMOD: 8=LTE, 7=HSPA, 4=WCDMA, 2=GPRS, 1=GSM
+                    if "+CNSMOD: 0,8" in cnsmod_response or "+CNSMOD: 1,8" in cnsmod_response:
+                        network_tech = "LTE"
+                    elif "+CNSMOD: 0,7" in cnsmod_response or "+CNSMOD: 1,7" in cnsmod_response:
+                        network_tech = "HSPA (3G+)"
+                    elif "+CNSMOD: 0,4" in cnsmod_response or "+CNSMOD: 1,4" in cnsmod_response:
+                        network_tech = "WCDMA (3G)"
+                    elif "+CNSMOD: 0,2" in cnsmod_response or "+CNSMOD: 1,2" in cnsmod_response:
+                        network_tech = "GPRS (2.5G)"
+                    elif "+CNSMOD: 0,1" in cnsmod_response or "+CNSMOD: 1,1" in cnsmod_response:
+                        network_tech = "GSM (2G)"
+                    else:
+                        network_tech = "Unknown"
+    
+                    # Check EPS (LTE) registration status
+                    ser.reset_input_buffer()
+                    ser.write(b"AT+CEREG?\r\n")
+                    time.sleep(1)
+                    cereg_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
+                    logger.info(f"   📡 EPS Registration (AT+CEREG?): {cereg_response.strip()}")
+    
+                    # Parse CEREG: 1=registered home, 5=registered roaming
+                    if "+CEREG: 0,1" in cereg_response or "+CEREG: 0,5" in cereg_response:
+                        eps_status = "✅ Registered (VoLTE available)"
+                    else:
+                        eps_status = "❌ Not registered (VoLTE unavailable)"
+    
+                    # Step 8b: Verify APN configurations (CGDCONT)
+                    logger.info("⚡ Verifying APN configurations (AT+CGDCONT?)...")
+                    ser.reset_input_buffer()
+                    ser.write(b"AT+CGDCONT?\r\n")
+                    time.sleep(1)
+                    cgdcont_response = ser.read(ser.in_waiting or 600).decode('utf-8', errors='ignore')
+    
+                    # Parse APN configurations
+                    data_apn_type = "Unknown"
+                    ims_apn_type = "Unknown"
+                    data_apn_configured = False
+                    ims_apn_configured = False
+    
+                    for line in cgdcont_response.split('\n'):
+                        if '+CGDCONT: 1,' in line:
+                            if 'IP","' in line:
+                                data_apn_type = "IP"
+                            elif 'IPV4V6","' in line:
+                                data_apn_type = "IPV4V6"
+                            data_apn_configured = True
+                            logger.info(f"   ✅ Context 1 (Data): {data_apn} ({data_apn_type})")
+                        elif '+CGDCONT: 2,' in line:
+                            if 'IPV4V6","' in line:
+                                ims_apn_type = "✅ IPV4V6 (correct)"
+                            elif 'IP","' in line:
+                                ims_apn_type = "⚠️ IP (should be IPV4V6!)"
+                            ims_apn_configured = True
+                            logger.info(f"   ✅ Context 2 (IMS): {ims_apn} ({ims_apn_type})")
+    
+                    # Step 8c: Verify PDP context activation (CGACT)
+                    logger.info("⚡ Verifying PDP context activation (AT+CGACT?)...")
+                    ser.reset_input_buffer()
+                    ser.write(b"AT+CGACT?\r\n")
+                    time.sleep(1)
+                    cgact_response = ser.read(ser.in_waiting or 300).decode('utf-8', errors='ignore')
+    
+                    # Parse context activation status
+                    ctx1_active = "+CGACT: 1,1" in cgact_response
+                    ctx2_active = "+CGACT: 2,1" in cgact_response
+    
+                    if ctx1_active:
+                        logger.info(f"   ✅ Context 1 (Data): ACTIVE")
+                    else:
+                        logger.warning(f"   ⚠️ Context 1 (Data): INACTIVE")
+    
+                    if ctx2_active:
+                        logger.info(f"   ✅ Context 2 (IMS): ACTIVE - VoLTE ready!")
+                    else:
+                        logger.warning(f"   ⚠️ Context 2 (IMS): INACTIVE - VoLTE may not work!")
+    
+                    # Store IMS/PDP status
+                    self.modem_details['ctx1_active'] = ctx1_active
+                    self.modem_details['ctx2_active'] = ctx2_active
+                    self.modem_details['data_apn_type'] = data_apn_type
+                    self.modem_details['ims_apn_type'] = ims_apn_type
+    
+                    # Internet configuration complete!
+                    # USB composition 9001 uses wwan0 (QMI) for data, not PPP
+                    # Internet monitor will use wwan0 with qmicli when primary internet fails
+                    logger.info(f"✅ Modem configured for internet via wwan0 (QMI)")
+                    logger.info(f"   Data APN: {data_apn}, IMS APN: {ims_apn}")
+                    logger.info(f"   PDP context activated - ready for VoLTE")
+                    logger.info(f"   VoLTE: {self.modem_details['volte']}")
+                    logger.info(f"   Network Mode: {actual_mode} ({network_tech})")
+                    logger.info(f"   EPS Status: {eps_status}")
+                    logger.info(f"   Backup internet: internet-monitor will use wwan0 when WiFi fails")
+    
+                    # Store network status in modem details
+                    self.modem_details['actual_network_mode'] = actual_mode
+                    self.modem_details['network_tech'] = network_tech
+                    self.modem_details['eps_status'] = eps_status
+    
+                    # Step 9: Save all configurations to NVRAM (persist across modem resets)
+                    logger.info("⚡ Step 9: Saving all configurations to NVRAM (AT&W)...")
+                    ser.reset_input_buffer()
+                    ser.write(b"AT&W\r\n")
+                    time.sleep(2)
+                    save_response = ser.read(ser.in_waiting or 200).decode('utf-8', errors='ignore')
+    
+                    if "OK" in save_response:
+                        logger.info("✅ All configurations saved to NVRAM - will persist across modem resets")
+                        logger.info("   Saved: APNs, VoLTE, Network Mode (LTE-only), PDP contexts")
+                    else:
+                        logger.warning(f"⚠️ Failed to save configurations: {save_response.strip()}")
+                        logger.warning("   Settings may be lost on modem reset/reboot")
+    
+                    self.modem_internet['interface'] = 'wwan0 (QMI)'
+                    self.modem_internet['ip'] = 'Ready (internet-monitor will activate)'
+    
+                    return True
 
             except serial.SerialException as e:
                 logger.error(f"Serial communication error: {e}")
@@ -1296,18 +1380,22 @@ USB Composition: {self.modem_details['usb_composition']}
                             time.sleep(5)
 
                             # 3. Test critical ports for AT command support (ttyUSB2, ttyUSB3)
-                            self.test_critical_ports_for_at()
+                            # CRITICAL: Use try-finally to ensure SMSTools is ALWAYS restarted
+                            try:
+                                self.test_critical_ports_for_at()
 
-                            # 4. Notify VPS BEFORE starting services
-                            # This ensures VPS gets status immediately after configuration
-                            self.notify_vps('connected', {
-                                'message': 'SIM7600 connected and configured',
-                                'voice_ready': True
-                            })
+                                # 4. Notify VPS BEFORE starting services
+                                # This ensures VPS gets status immediately after configuration
+                                self.notify_vps('connected', {
+                                    'message': 'SIM7600 connected and configured',
+                                    'voice_ready': True
+                                })
 
-                            # 5. Restart SMSTools before starting voice bot
-                            # This ensures SMS service is ready and ttyUSB2 is properly configured
-                            self.restart_smstools()
+                            finally:
+                                # 5. ALWAYS restart SMSTools, even if configuration failed
+                                # This ensures SMS service is always running for production
+                                logger.info("🔄 Ensuring SMSTools is restarted after configuration...")
+                                self.restart_smstools()
 
                             # 6. Start voice bot service
                             if self.start_voice_bot_service():
