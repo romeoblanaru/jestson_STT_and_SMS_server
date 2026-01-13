@@ -6,18 +6,24 @@
 
 RECIPIENT="$1"
 AT_PORT="/dev/ttyUSB_SIM7600_AT"  # Stable symlink to Interface 02 (auto-detected)
-SMS_DIR="/var/spool/sms/outgoing"
+API_URL="http://localhost:8088/send_sms"
 LOG="/var/log/modem_status_collector.log"
 
 log() { echo "[$(date '+%H:%M:%S')] $*" >> "$LOG" 2>&1; }
 
 send_sms() {
     local msg="$1"
-    local file="$SMS_DIR/modem_status_$(date +%s)_$$"
-    # Using GSM encoding for testing (160 chars max, not 70 for UCS2)
-    echo -e "To: $RECIPIENT\nAlphabet: GSM\n\n$msg" > "$file"
-    chmod 666 "$file" 2>/dev/null
-    log "SMS queued: $file"
+    # Use unified API - handles encoding, splitting, and delays automatically
+    local response=$(curl -s -X POST "$API_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"to\":\"$RECIPIENT\",\"message\":\"$msg\"}" 2>&1)
+
+    if echo "$response" | grep -q '"success": true'; then
+        local parts=$(echo "$response" | grep -o '"parts": [0-9]*' | grep -o '[0-9]*')
+        log "SMS sent via API (parts: ${parts:-1})"
+    else
+        log "ERROR: API failed - $response"
+    fi
 }
 
 # Trap to ensure SMSD always restarts

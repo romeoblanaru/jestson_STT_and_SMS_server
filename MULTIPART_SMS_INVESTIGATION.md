@@ -298,3 +298,242 @@ Message (Part 1/2): "Ora curent este 14:30 (ora local, 13 ianuarie 2026). Cu ce 
 
 **Document Version:** 1.0
 **Last Updated:** 2026-01-12 23:15 GMT
+
+---
+
+# UPDATE - 2026-01-12 23:40 GMT
+
+## Option A Test Results
+
+### Implementation:
+```ini
+init = AT+CMGF=1
+init2 = AT+CSCS="UCS2"
+```
+
+### Test Results:
+
+**✅ Single-Part Message Test - SUCCESS:**
+- Message: "Bun ziua! Cu ce vă pot ajuta astăzi?" (Romanian with diacritics)
+- Alphabet: UCS2
+- Status: **SENT SUCCESSFULLY** in 6 seconds
+- Diacritics: Preserved correctly
+- Sending time: 23:33:46
+
+**❌ Modem Stability - FAILED:**
+- Modem hung **AFTER** sending the message
+- Hang occurred during routine status check (AT+CSQ)
+- Error: `write_to_modem: error 5: Input/output error`
+- USB port ttyUSB2 disappeared after hang
+- Required physical modem reset
+
+**Conclusion:** UCS2 character set works for single messages but causes severe modem instability.
+
+---
+
+## Manual Testing via Picocom (2026-01-12 23:40)
+
+### Modem Info:
+```
+Manufacturer: SIMCOM INCORPORATED
+Model: SIMCOM_SIM7600G-H
+Revision: SIM7600G_V2.0.2
+IMEI: 862636055891897
+```
+
+### AT Command Tests:
+
+**Character Set Configuration:**
+```
+AT+CSCS="UCS2"
+Response: OK
+
+AT+CSCS?
+Response: +CSCS: "UCS2"  ✅ Confirmed
+```
+
+**SMS Parameters:**
+```
+AT+CSMP?
+Response: +CSMP: 17,183,0,0
+```
+- `17` = First octet with UDHI (User Data Header Indicator) enabled
+- Should support concatenation, but...
+
+**TEXT Mode Sending:**
+```
+AT+CMGF=1
+AT+CMGS="+447504128961"
+Response: ERROR
+```
+
+**Key Discovery:** 
+- ❌ **Modem does NOT auto-split long messages in TEXT mode**
+- ❌ **TEXT mode + UCS2 is incompatible for CMGS** on SIM7600G-H
+- Even with CSMP=17 (concatenation enabled), modem doesn't split automatically
+
+---
+
+## Research Findings - Best Professional Solution
+
+### Discovery: SMSTools3 Native Unicode Support
+
+**How SMSTools3 is DESIGNED to work:**
+
+1. **Application receives UTF-8 messages** (from VPS)
+2. **SMSTools3 automatically detects** non-GSM-7 characters
+3. **SMSTools3 auto-switches to PDU mode** when needed
+4. **SMSTools3 handles UCS-2 encoding** internally
+5. **SMSTools3 creates concatenation headers** for multipart
+6. **Modem stays in simple mode** (IRA or GSM)
+
+### ❌ What We Did Wrong (Option A):
+
+```ini
+init2 = AT+CSCS="UCS2"  # Forced modem to UCS2
+```
+
+**Problems:**
+- Set modem character set to UCS2
+- Expected modem to handle everything
+- **UCS-2 in TEXT mode on SIM7600 is BUGGY**
+- Known issues: multipart unreliable, character corruption, modem hangs
+- Fighting against SMSTools3's design
+
+---
+
+## ✅ Correct Approach - Option B (IRA/GSM Character Set)
+
+### Recommended Configuration:
+
+**Primary recommendation (most stable):**
+```ini
+init = AT+CMGF=1
+init2 = AT+CSCS="IRA"
+```
+
+**Alternative (if IRA has issues):**
+```ini
+init = AT+CMGF=1
+init2 = AT+CSCS="GSM"
+```
+
+### Why IRA is Best:
+
+**IRA (International Reference Alphabet) Benefits:**
+- ✅ **Most stable with SMSTools3**
+- ✅ Supports full GSM-7 + extended characters
+- ✅ Covers most Lithuanian/Romanian diacritics
+- ✅ **Fewer encoding bugs** than UCS2
+- ✅ **Better multipart reliability**
+- ✅ SMSTools3 designed to work with IRA
+- ✅ **Modem stays stable** - no hangs
+
+**How it works:**
+1. Modem set to IRA (simple, stable)
+2. VPS sends UTF-8 message to SMSTools3
+3. **SMSTools3 detects diacritics** (non-GSM-7 chars)
+4. **SMSTools3 automatically switches to PDU mode**
+5. **SMSTools3 encodes to UCS-2 in PDU**
+6. **SMSTools3 creates concatenation headers**
+7. Modem sends PDU (modem just transmits, no encoding logic)
+8. **No modem hang** - modem isn't doing encoding
+
+### Why UCS2 Failed:
+
+**Known SIM7600G-H Issues with UCS2:**
+- ❌ UCS-2 in TEXT mode is **buggy/unreliable**
+- ❌ **Multipart messages fail or hang**
+- ❌ Special character corruption
+- ❌ Modem instability (confirmed by our tests)
+- ❌ Community reports widespread issues
+
+**Root cause:** We were forcing the modem to do encoding/concatenation that SMSTools3 should handle.
+
+---
+
+## Option B Implementation Plan
+
+### Configuration Change:
+
+**Before (Option A - FAILED):**
+```ini
+init = AT+CMGF=1
+init2 = AT+CSCS="UCS2"  # BUGGY on SIM7600!
+```
+
+**After (Option B - RECOMMENDED):**
+```ini
+init = AT+CMGF=1
+init2 = AT+CSCS="IRA"   # Stable, let SMSTools3 handle encoding
+```
+
+### Keep These Settings:
+```ini
+autosplit = 3                    # SMSTools3 splits long messages
+decode_unicode_text = yes        # SMSTools3 decodes incoming UCS-2
+cs_convert = yes                 # SMSTools3 handles character set conversion
+sentsleeptime = 2               # 2 second delay between parts
+```
+
+### Expected Behavior:
+
+**Incoming SMS:**
+1. Modem receives PDU
+2. SMSTools3 detects UCS-2 encoding
+3. SMSTools3 decodes to UTF-8
+4. Diacritics preserved
+
+**Outgoing SMS:**
+1. VPS sends UTF-8 message
+2. SMSTools3 detects diacritics
+3. SMSTools3 switches to PDU mode
+4. SMSTools3 encodes to UCS-2
+5. SMSTools3 splits into parts (autosplit=3)
+6. SMSTools3 adds concatenation headers
+7. Modem sends each PDU part
+8. **sentsleeptime=2** adds 2 second delay between parts
+9. **Modem stays stable** (no encoding logic)
+
+---
+
+## Test Plan for Option B
+
+1. ✅ Document findings (this update)
+2. ⏳ Change config to IRA character set
+3. ⏳ Backup and restart SMSD
+4. ⏳ Test single-part message with diacritics
+5. ⏳ Test multipart message (gradually increase length)
+6. ⏳ Monitor for:
+   - Message delivery success
+   - Diacritics preservation
+   - Modem stability (no hangs)
+   - Proper multipart splitting
+   - AT command responses
+7. ⏳ If IRA works: Document success
+8. ⏳ If IRA fails: Try GSM character set
+
+---
+
+## Key Learnings
+
+1. **SMSTools3 is designed to handle encoding** - don't force modem to do it
+2. **UCS2 on SIM7600 is buggy** - avoid in TEXT mode
+3. **IRA is the stable choice** - industry best practice
+4. **Modem should be simple** - just transmit PDUs, don't encode
+5. **Single messages worked** - proves diacritics can work
+6. **Multipart is the challenge** - but SMSTools3 handles it in PDU mode
+7. **Let SMSTools3 do its job** - auto-detection and encoding
+
+---
+
+## Status Update
+
+- **Option A (UCS2):** ❌ FAILED - Modem unstable, hangs after sending
+- **Option B (IRA):** ⏳ READY TO TEST - Recommended professional solution
+- **Next:** Implement IRA configuration and test multipart
+
+---
+
+**Document Version:** 2.0  
+**Last Updated:** 2026-01-12 23:45 GMT

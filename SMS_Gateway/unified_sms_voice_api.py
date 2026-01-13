@@ -66,6 +66,78 @@ logger.info("Unified API logging initialized (RAM disk + journal)")
 # Monitoring functions removed - moved to port 8070 monitoring webhook
 # All modem monitoring should be done via port 8070, not the SMS gateway
 
+def split_sms_intelligently(message, max_length=70):
+    """
+    Split SMS message intelligently at natural boundaries
+
+    NOTE: This function was implemented because the SIM7600G-H modem firmware
+    has a critical bug with multipart UCS-2 messages. The modem hangs when
+    SMSTools3 tries to send concatenated SMS (using UDH headers). To work around
+    this, we split long messages at the API level and send them as separate
+    single-part SMS with 2-second delays between parts.
+
+    Splitting priority (looks within last 35 chars from split point):
+    1. Line breaks (\n or \r) - cleanest split
+    2. Punctuation (?, !, ., ,) - after halfway point
+    3. Spaces - after halfway point
+    4. Hard split at max_length if no good boundary found
+
+    Args:
+        message: Text to split
+        max_length: Max characters per part (default 70 for UCS2)
+    Returns:
+        List of message parts
+    """
+    if len(message) <= max_length:
+        return [message]
+
+    parts = []
+    remaining = message
+
+    while remaining:
+        if len(remaining) <= max_length:
+            # Last part
+            parts.append(remaining)
+            break
+
+        # Find best split point
+        chunk = remaining[:max_length]
+        split_pos = -1
+        half_point = max_length // 2
+        last_35_chars_start = max(max_length - 35, 0)
+
+        # Strategy 1: Look for line break (\n or \r) within last 35 chars
+        for i in range(last_35_chars_start, len(chunk)):
+            if chunk[i] in ['\n', '\r']:
+                split_pos = i + 1  # Include the newline
+                break
+
+        # Strategy 2: If no line break, look for punctuation (?, !, ., ,)
+        # within last 35 chars but after halfway point
+        if split_pos == -1:
+            for i in range(len(chunk) - 1, max(half_point, last_35_chars_start) - 1, -1):
+                if chunk[i] in ['?', '!', '.', ',']:
+                    split_pos = i + 1  # Include the punctuation
+                    break
+
+        # Strategy 3: If no punctuation, find last space after halfway point
+        if split_pos == -1:
+            # Find last space in the chunk after halfway point
+            for i in range(len(chunk) - 1, half_point - 1, -1):
+                if chunk[i] == ' ':
+                    split_pos = i + 1  # Include the space
+                    break
+
+        # Strategy 4: No good split found - split at max_length
+        if split_pos == -1:
+            split_pos = max_length
+
+        # Add this part
+        parts.append(remaining[:split_pos].rstrip())
+        remaining = remaining[split_pos:].lstrip()
+
+    return parts
+
 def load_voice_config():
     """Load voice configuration for phone call handling"""
     global voice_config_loaded, tts_provider, voice_config
@@ -200,39 +272,58 @@ class SMSHandler(BaseHTTPRequestHandler):
                     }).encode())
                     return
                 
-                # Create SMS file for smstools3
-                timestamp = int(time.time() * 1000)
-                filename = f"/var/spool/sms/outgoing/api_{timestamp}_{os.getpid()}"
-                
                 # Check if Unicode is needed
                 needs_unicode = False
                 try:
                     message.encode('ascii')
                 except UnicodeEncodeError:
                     needs_unicode = True
-                
-                if needs_unicode:
-                    # Write with binary UTF-16-BE for Unicode
-                    with open(filename, 'wb') as f:
-                        f.write(f"To: {recipient}\n".encode('ascii'))
-                        f.write(b"Alphabet: UCS2\n\n")
-                        f.write(message.encode('utf-16-be'))
-                else:
-                    # ASCII only - use text mode
-                    with open(filename, 'w') as f:
-                        f.write(f"To: {recipient}\n\n{message}")
-                
-                os.chmod(filename, 0o666)
-                
-                logger.info(f"SMS queued: {recipient} - {message[:50]}... (Unicode: {needs_unicode})")
+
+                # Smart split for long messages (70 chars for UCS2, 160 for GSM7)
+                # SIM7600G-H modem cannot handle UCS-2 multipart - split at API level
+                max_length = 70 if needs_unicode else 160
+                message_parts = split_sms_intelligently(message, max_length)
+
+                # Create SMS file(s) for smstools3
+                timestamp = int(time.time() * 1000)
+                files_created = []
+
+                for part_num, part_text in enumerate(message_parts, 1):
+                    # Create filename with part number if multipart
+                    if len(message_parts) > 1:
+                        filename = f"/var/spool/sms/outgoing/api_{timestamp}_{os.getpid()}_part{part_num}"
+                    else:
+                        filename = f"/var/spool/sms/outgoing/api_{timestamp}_{os.getpid()}"
+
+                    if needs_unicode:
+                        # Write with binary UTF-16-BE for Unicode
+                        with open(filename, 'wb') as f:
+                            f.write(f"To: {recipient}\n".encode('ascii'))
+                            f.write(b"Alphabet: UCS2\n\n")
+                            f.write(part_text.encode('utf-16-be'))
+                    else:
+                        # ASCII only - use text mode
+                        with open(filename, 'w') as f:
+                            f.write(f"To: {recipient}\n\n{part_text}")
+
+                    os.chmod(filename, 0o666)
+                    files_created.append(filename)
+
+                    logger.info(f"SMS queued: {recipient} - Part {part_num}/{len(message_parts)} - {part_text[:40]}... (Unicode: {needs_unicode})")
+
+                    # Add 2-second delay between parts (except after last part)
+                    if part_num < len(message_parts):
+                        time.sleep(2)
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({
                     'success': True,
-                    'message_id': filename.split('_')[-1],
-                    'encoding': 'UCS2' if needs_unicode else 'GSM7'
+                    'message_id': timestamp,
+                    'encoding': 'UCS2' if needs_unicode else 'GSM7',
+                    'parts': len(message_parts),
+                    'files': [f.split('/')[-1] for f in files_created]
                 }).encode())
                 
             except Exception as e:

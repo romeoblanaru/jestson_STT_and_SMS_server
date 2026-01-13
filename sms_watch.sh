@@ -93,18 +93,49 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
     # SMS sent - Log entry shows the sent message
     elif [[ "$line" =~ "SMS sent" ]] && [[ "$line" =~ "Message_id:" ]]; then
         number=$(echo "$line" | grep -oE 'To: [0-9+]+' | sed 's/To: //')
+        message_id=$(echo "$line" | grep -oE 'Message_id: [0-9]+' | sed 's/Message_id: //')
 
         # Print the first line
         msg="[$time] ${ORANGE}← OUT${RESET} to ${YELLOW}$number${RESET} via Vodafone"
 
-        # Get message content from the recent API log (where it was queued)
-        msg_content=$(grep "SMS queued:.*${number}" /var/log/voice_bot_ram/unified_api.log 2>/dev/null | tail -1 | sed -n 's/.*- \(.*\) (Unicode:.*/\1/p')
+        # Find the actual sent file and read its content
+        sleep 0.1  # Brief delay to ensure file is moved to sent/
+        sent_file=$(ls -t /var/spool/sms/sent/*${message_id}* 2>/dev/null | head -1)
+
+        if [[ -z "$sent_file" ]]; then
+            # Fallback: try to find by number and timestamp
+            sent_file=$(ls -t /var/spool/sms/sent/ 2>/dev/null | grep -E "api_.*_${number##+}" | head -1)
+        fi
+
+        # Use API log for message content (cleaner, handles UCS2 properly)
+        # Match by timestamp proximity and number
+        msg_content=""
+
+        # Detect if this is a multipart message
+        part_label=""
+        if [[ -f "$sent_file" ]] && [[ "$sent_file" =~ _part([0-9]+) ]]; then
+            part_num="${BASH_REMATCH[1]}"
+            part_label="Part ${part_num}: "
+
+            # Find the specific part in API log
+            msg_content=$(grep "SMS queued:.*${number}.*Part ${part_num}/" /var/log/voice_bot_ram/unified_api.log 2>/dev/null | tail -1 | sed -n 's/.*Part [0-9]*\/[0-9]* - \(.*\) (Unicode:.*/\1/p')
+        fi
+
+        # If not found or not multipart, get the most recent message for this number
+        if [[ -z "$msg_content" ]]; then
+            msg_content=$(grep "SMS queued:.*${number}" /var/log/voice_bot_ram/unified_api.log 2>/dev/null | tail -1 | sed -n 's/.*- \(.*\) (Unicode:.*/\1/p')
+        fi
+
+        # Limit to 60 chars for display
+        if [[ -n "$msg_content" ]]; then
+            msg_content="${part_label}${msg_content:0:60}"
+        fi
 
         if [[ -n "$msg_content" ]]; then
             # Print the OUT line first
             echo -e "$msg"
             # Then print the message content on a second line
-            msg="[$time] ${MAGENTA}  ↳ Message:${RESET} ${DARKGRAY}\"${msg_content}\"${RESET}"
+            msg="[$time] ${MAGENTA}  ↳ Message:${RESET} ${DARKGRAY}\"${msg_content}...\"${RESET}"
         fi
         
     # VPS forwarding status - SUCCESS
