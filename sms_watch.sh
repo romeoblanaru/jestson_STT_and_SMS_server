@@ -160,14 +160,17 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
 
         [[ $DEBUG -eq 1 ]] && echo "[DEBUG] msg_content: ${msg_content:0:50}" >&2
 
+        # Print the OUT line first
+        echo -e "$msg"
+
         if [[ -n "$msg_content" ]]; then
-            # Print the OUT line first
-            echo -e "$msg"
             # Then print the message content on a second line
             msg="[$time] ${MAGENTA}  ↳ Message:${RESET} ${DARKGRAY}\"${msg_content}...\"${RESET}"
             [[ $DEBUG -eq 1 ]] && echo "[DEBUG] Set msg to message content line" >&2
         else
-            [[ $DEBUG -eq 1 ]] && echo "[DEBUG] msg_content is EMPTY!" >&2
+            # Cache file not found - display error
+            msg="[$time] ${RED}  ↳ ERR: file not found${RESET} ${DARKGRAY}(cache missing)${RESET}"
+            [[ $DEBUG -eq 1 ]] && echo "[DEBUG] msg_content is EMPTY - showing error" >&2
         fi
         
     # VPS forwarding status - SUCCESS

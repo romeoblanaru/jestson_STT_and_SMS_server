@@ -123,28 +123,42 @@ docker stop $(docker ps -q --filter ancestor=parakeet-server)
 
 ### **NEVER Store Passwords in Scripts or Files**
 
-**CRITICAL SECURITY RULE:** Do NOT create scripts, expect files, or any other files that contain sudo passwords, API keys, or sensitive credentials UNLESS:
+**CRITICAL SECURITY RULE:** Do NOT create scripts, expect files, or any other files that contain sudo passwords, API keys, or sensitive credentials.
 
-1. **User explicitly understands the security risks**
-2. **User explicitly confirms they want to proceed**
-3. **The file will be deleted immediately after use**
+**If the user asks you to save passwords in files:**
 
-**Why this matters:**
-- Password files can be accidentally committed to git
-- Files remain in file system and can be read by other users/processes
-- Security audit tools will flag them
-- Passwords in files violate security best practices
+1. **STOP and explain the risks:**
+   - Password files can be accidentally committed to git
+   - Files remain in file system and can be read by other users/processes
+   - Security audit tools will flag hardcoded credentials
+   - Passwords in files violate security best practices
+   - Scripts with passwords can be copied, shared, or exposed unintentionally
 
-**What TO do:**
-- If user provides a password, use it directly in commands (e.g., `echo 'password' | sudo -S command`)
-- Use secure credential management (environment variables, keychains)
-- Create installation scripts that prompt for password at runtime with `sudo`
-- Delete any temporary password files immediately after use
+2. **Propose secure alternatives:**
+   - Use sudoers configuration (NOPASSWD) for specific commands
+   - Use environment variables for credentials
+   - Use secure credential managers (keychains, vaults)
+   - Prompt for password at runtime with `sudo`
+   - Use SSH keys instead of passwords where applicable
+
+3. **If user INSISTS on password in file:**
+   - Explain the risks AGAIN clearly
+   - Ask for explicit confirmation: "I understand the security risks and want to proceed"
+   - Warn that the file should be deleted immediately after use
+   - Ensure file has restrictive permissions (600)
+   - NEVER commit password files to version control
+
+**What TO do (preferred methods):**
+- Configure sudoers with NOPASSWD for specific commands (see example: `/etc/sudoers.d/sms_watch`)
+- Use environment variables: `export API_KEY="..."`
+- Prompt at runtime: `sudo command` (will ask for password)
+- Use credential managers for API keys and tokens
 
 **What NOT to do:**
-- Never save passwords to files unless user explicitly confirms the risk
+- Never hardcode passwords in scripts (e.g., `echo 'password' | sudo -S`)
 - Never log or echo passwords in output
 - Never commit password files to version control
+- Never use passwords in command line arguments (visible in `ps`)
 
 ---
 

@@ -115,7 +115,7 @@ sleep 3
 log "SMSD stabilized, queuing message..."
 
 log "Sending SMS..."
-send_sms "$(echo -e "$MSG")"
+send_sms "$MSG"
 
 log "=== DONE ==="
 trap - EXIT
