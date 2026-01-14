@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/var/log/voice_config.log'),
+        logging.FileHandler('/var/log/voice_bot_ram/voice_config.log'),
         logging.StreamHandler()
     ]
 )

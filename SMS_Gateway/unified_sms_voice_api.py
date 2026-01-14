@@ -32,6 +32,10 @@ hangup_queue = queue.Queue()
 response_stats = {}
 voice_config = None
 
+# SMS queuing system for async processing
+sms_queue = queue.Queue()
+sms_processor = None
+
 # Set up logging (writes to RAM disk)
 from logging.handlers import RotatingFileHandler
 
@@ -76,11 +80,12 @@ def split_sms_intelligently(message, max_length=70):
     this, we split long messages at the API level and send them as separate
     single-part SMS with 2-second delays between parts.
 
-    Splitting priority (looks within last 35 chars from split point):
-    1. Line breaks (\n or \r) - cleanest split
-    2. Punctuation (?, !, ., ,) - after halfway point
-    3. Spaces - after halfway point
-    4. Hard split at max_length if no good boundary found
+    Splitting algorithm (searches backwards from position 70 to 15):
+    Step 0: Try to find carriage return (\n or \r) anywhere in chunk - split there
+    Step 1: Look backwards from chr 70 to chr 15 for punctuation (., !, ?, :, ;) - exclude comma
+    Step 2: If not found, look backwards from chr 70 to chr 15 for comma (,)
+    Step 3: If not found, look backwards from chr 70 to chr 15 for space
+    Step 4: If nothing found, hard split at max_length
 
     Args:
         message: Text to split
@@ -100,35 +105,39 @@ def split_sms_intelligently(message, max_length=70):
             parts.append(remaining)
             break
 
-        # Find best split point
+        # Get chunk to split
         chunk = remaining[:max_length]
         split_pos = -1
-        half_point = max_length // 2
-        last_35_chars_start = max(max_length - 35, 0)
+        min_search_pos = 15  # Don't split too early (minimum 15 chars per part)
 
-        # Strategy 1: Look for line break (\n or \r) within last 35 chars
-        for i in range(last_35_chars_start, len(chunk)):
+        # Step 0: Look for carriage return (\n or \r) anywhere in chunk
+        for i in range(len(chunk) - 1, -1, -1):
             if chunk[i] in ['\n', '\r']:
                 split_pos = i + 1  # Include the newline
                 break
 
-        # Strategy 2: If no line break, look for punctuation (?, !, ., ,)
-        # within last 35 chars but after halfway point
+        # Step 1: Look backwards from position 70 to 15 for punctuation (exclude comma)
         if split_pos == -1:
-            for i in range(len(chunk) - 1, max(half_point, last_35_chars_start) - 1, -1):
-                if chunk[i] in ['?', '!', '.', ',']:
+            for i in range(len(chunk) - 1, min_search_pos - 1, -1):
+                if chunk[i] in ['.', '!', '?', ':', ';']:
                     split_pos = i + 1  # Include the punctuation
                     break
 
-        # Strategy 3: If no punctuation, find last space after halfway point
+        # Step 2: Look backwards from position 70 to 15 for comma
         if split_pos == -1:
-            # Find last space in the chunk after halfway point
-            for i in range(len(chunk) - 1, half_point - 1, -1):
+            for i in range(len(chunk) - 1, min_search_pos - 1, -1):
+                if chunk[i] == ',':
+                    split_pos = i + 1  # Include the comma
+                    break
+
+        # Step 3: Look backwards from position 70 to 15 for space
+        if split_pos == -1:
+            for i in range(len(chunk) - 1, min_search_pos - 1, -1):
                 if chunk[i] == ' ':
                     split_pos = i + 1  # Include the space
                     break
 
-        # Strategy 4: No good split found - split at max_length
+        # Step 4: No good split found - hard split at max_length
         if split_pos == -1:
             split_pos = max_length
 
@@ -172,6 +181,80 @@ def load_voice_config():
     except Exception as e:
         logger.error(f"Failed to load voice config: {e}")
         return False
+
+class SMSProcessor(threading.Thread):
+    """Background thread for async processing of SMS messages"""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.running = True
+
+    def run(self):
+        """Process SMS queue with delays between parts"""
+        logger.info("SMS processor thread started")
+
+        while self.running:
+            try:
+                # Get request with timeout
+                request = sms_queue.get(timeout=1)
+
+                recipient = request['recipient']
+                message_parts = request['message_parts']
+                needs_unicode = request['needs_unicode']
+                timestamp = request['timestamp']
+                pid = request['pid']
+
+                logger.info(f"Processing {len(message_parts)} SMS parts for {recipient}")
+
+                files_created = []
+
+                for part_num, part_text in enumerate(message_parts, 1):
+                    # Create filename with part number if multipart
+                    if len(message_parts) > 1:
+                        filename = f"/var/spool/sms/outgoing/api_{timestamp}_{pid}_part{part_num}"
+                    else:
+                        filename = f"/var/spool/sms/outgoing/api_{timestamp}_{pid}"
+
+                    if needs_unicode:
+                        # Write with binary UTF-16-BE for Unicode
+                        with open(filename, 'wb') as f:
+                            f.write(f"To: {recipient}\n".encode('ascii'))
+                            f.write(b"Alphabet: UCS2\n\n")
+                            f.write(part_text.encode('utf-16-be'))
+                    else:
+                        # ASCII only - use text mode
+                        with open(filename, 'w') as f:
+                            f.write(f"To: {recipient}\n\n{part_text}")
+
+                    os.chmod(filename, 0o666)
+                    files_created.append(filename)
+
+                    # Save message to cache file for sms_watch.sh to display
+                    cache_dir = "/tmp/sms_msg_cache"
+                    os.makedirs(cache_dir, exist_ok=True)
+                    cache_filename = os.path.basename(filename) + ".txt"
+                    cache_path = os.path.join(cache_dir, cache_filename)
+                    with open(cache_path, 'w', encoding='utf-8') as f:
+                        f.write(part_text)
+                    os.chmod(cache_path, 0o666)
+
+                    # Log more chars (100) so each part shows unique content in monitoring
+                    logger.info(f"SMS queued: {recipient} - Part {part_num}/{len(message_parts)} - {part_text[:100]} (Unicode: {needs_unicode})")
+
+                    # Add 2-second delay between parts (except after last part)
+                    if part_num < len(message_parts):
+                        time.sleep(2)
+
+                logger.info(f"SMS processing complete for {recipient}: {len(files_created)} files created")
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Error in SMS processing: {e}")
+
+    def stop(self):
+        """Stop processor thread"""
+        self.running = False
 
 class TTSProcessor(threading.Thread):
     """Background thread for processing TTS requests"""
@@ -284,37 +367,23 @@ class SMSHandler(BaseHTTPRequestHandler):
                 max_length = 70 if needs_unicode else 160
                 message_parts = split_sms_intelligently(message, max_length)
 
-                # Create SMS file(s) for smstools3
+                # Generate timestamp and file identifiers
                 timestamp = int(time.time() * 1000)
-                files_created = []
+                pid = os.getpid()
 
-                for part_num, part_text in enumerate(message_parts, 1):
-                    # Create filename with part number if multipart
-                    if len(message_parts) > 1:
-                        filename = f"/var/spool/sms/outgoing/api_{timestamp}_{os.getpid()}_part{part_num}"
-                    else:
-                        filename = f"/var/spool/sms/outgoing/api_{timestamp}_{os.getpid()}"
+                # Queue SMS for async processing (instant response!)
+                sms_request = {
+                    'recipient': recipient,
+                    'message_parts': message_parts,
+                    'needs_unicode': needs_unicode,
+                    'timestamp': timestamp,
+                    'pid': pid
+                }
+                sms_queue.put(sms_request)
 
-                    if needs_unicode:
-                        # Write with binary UTF-16-BE for Unicode
-                        with open(filename, 'wb') as f:
-                            f.write(f"To: {recipient}\n".encode('ascii'))
-                            f.write(b"Alphabet: UCS2\n\n")
-                            f.write(part_text.encode('utf-16-be'))
-                    else:
-                        # ASCII only - use text mode
-                        with open(filename, 'w') as f:
-                            f.write(f"To: {recipient}\n\n{part_text}")
+                logger.info(f"SMS request queued: {recipient} - {len(message_parts)} parts - will process asynchronously")
 
-                    os.chmod(filename, 0o666)
-                    files_created.append(filename)
-
-                    logger.info(f"SMS queued: {recipient} - Part {part_num}/{len(message_parts)} - {part_text[:40]}... (Unicode: {needs_unicode})")
-
-                    # Add 2-second delay between parts (except after last part)
-                    if part_num < len(message_parts):
-                        time.sleep(2)
-                
+                # Respond immediately without waiting for file creation
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
@@ -323,7 +392,8 @@ class SMSHandler(BaseHTTPRequestHandler):
                     'message_id': timestamp,
                     'encoding': 'UCS2' if needs_unicode else 'GSM7',
                     'parts': len(message_parts),
-                    'files': [f.split('/')[-1] for f in files_created]
+                    'queued': True,
+                    'processing': 'async'
                 }).encode())
                 
             except Exception as e:
@@ -497,6 +567,13 @@ if __name__ == '__main__':
     print("  POST /phone_call - Receive TTS commands from VPS")
     print("  GET /phone_call/status - Get phone call processing status")
     print("")
+
+    # Start SMS processor for async message handling
+    logger.info("Starting SMS processor for async message handling...")
+    sms_processor = SMSProcessor()
+    sms_processor.start()
+    logger.info("✅ SMS processor started - messages will be processed asynchronously")
+    print("✅ SMS async processor started")
 
     # Load voice config at startup, not lazily
     logger.info("Loading voice configuration at startup...")

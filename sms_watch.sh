@@ -1,8 +1,18 @@
 #!/bin/bash
 # SMS Activity Monitor with Chronological Sorting
+# Version: 2.7 - Production ready: 2sec wait, debug off
 
-echo "SMS Activity Monitor - Chronologically Sorted"
-echo "=============================================="
+VERSION="2.7"
+DEBUG=0  # Set to 1 to enable debug output
+CACHE_DIR="/tmp/sms_msg_cache"
+
+echo "SMS Activity Monitor v${VERSION} - Chronologically Sorted"
+echo "==========================================================="
+echo ""
+
+# Cleanup old cache files (older than 1 hour)
+find "$CACHE_DIR" -name "api_*.txt" -mmin +60 -delete 2>/dev/null
+echo "Cache directory: $CACHE_DIR (auto-cleanup: 1 hour)"
 echo ""
 
 # Color codes
@@ -81,7 +91,12 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
         if [[ -f "$latest_sms" ]]; then
             # Check if this file is from the sender we just detected
             if sudo grep -q "From: ${from}" "$latest_sms" 2>/dev/null; then
-                msg_body=$(sudo awk '/^$/{p=1;next} p' "$latest_sms" 2>/dev/null | head -20 | tr '\n' ' ')
+                # Check if UCS2 or plain text
+                if sudo grep -q "Alphabet: UCS2" "$latest_sms" 2>/dev/null; then
+                    msg_body=$(sudo awk '/^$/{p=1;next} p' "$latest_sms" 2>/dev/null | tr -d '\000' | tr '\n' ' ' | head -c 150)
+                else
+                    msg_body=$(sudo awk '/^$/{p=1;next} p' "$latest_sms" 2>/dev/null | tr '\n' ' ' | head -c 150)
+                fi
                 if [[ -n "$msg_body" ]]; then
                     # Print the message on the same event
                     echo -e "$msg"
@@ -98,44 +113,61 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
         # Print the first line
         msg="[$time] ${ORANGE}← OUT${RESET} to ${YELLOW}$number${RESET} via Vodafone"
 
-        # Find the actual sent file and read its content
-        sleep 0.1  # Brief delay to ensure file is moved to sent/
-        sent_file=$(ls -t /var/spool/sms/sent/*${message_id}* 2>/dev/null | head -1)
+        # Find the cache file - much simpler than parsing sent files!
+        sleep 2  # Wait for file to be moved to sent/ directory (SMSTools takes ~2 sec)
 
-        if [[ -z "$sent_file" ]]; then
-            # Fallback: try to find by number and timestamp
-            sent_file=$(ls -t /var/spool/sms/sent/ 2>/dev/null | grep -E "api_.*_${number##+}" | head -1)
-        fi
-
-        # Use API log for message content (cleaner, handles UCS2 properly)
-        # Match by timestamp proximity and number
         msg_content=""
-
-        # Detect if this is a multipart message
         part_label=""
-        if [[ -f "$sent_file" ]] && [[ "$sent_file" =~ _part([0-9]+) ]]; then
-            part_num="${BASH_REMATCH[1]}"
-            part_label="Part ${part_num}: "
 
-            # Find the specific part in API log
-            msg_content=$(grep "SMS queued:.*${number}.*Part ${part_num}/" /var/log/voice_bot_ram/unified_api.log 2>/dev/null | tail -1 | sed -n 's/.*Part [0-9]*\/[0-9]* - \(.*\) (Unicode:.*/\1/p')
-        fi
+        # Find most recent cache file(s) - they're named like the queue files
+        # Look for files created in the last 15 minutes that match the pattern
+        [[ $DEBUG -eq 1 ]] && echo "[DEBUG] Looking for msg_id: $message_id in cache files" >&2
 
-        # If not found or not multipart, get the most recent message for this number
-        if [[ -z "$msg_content" ]]; then
-            msg_content=$(grep "SMS queued:.*${number}" /var/log/voice_bot_ram/unified_api.log 2>/dev/null | tail -1 | sed -n 's/.*- \(.*\) (Unicode:.*/\1/p')
-        fi
+        for cache_file in $(find "$CACHE_DIR" -name "api_*.txt" -mmin -15 2>/dev/null | sort -r); do
+            basename_cache=$(basename "$cache_file" .txt)
+            [[ $DEBUG -eq 1 ]] && echo "[DEBUG] Checking: $basename_cache" >&2
 
-        # Limit to 60 chars for display
-        if [[ -n "$msg_content" ]]; then
-            msg_content="${part_label}${msg_content:0:60}"
-        fi
+            # Check if corresponding sent file exists with this message_id
+            sent_file="/var/spool/sms/sent/${basename_cache}"
+            if [[ -f "$sent_file" ]]; then
+                [[ $DEBUG -eq 1 ]] && echo "[DEBUG]   Sent file exists, checking msg_id..." >&2
+                # Verify this is the right file by checking Message_id
+                if sudo grep -q "Message_id: ${message_id}" "$sent_file" 2>/dev/null; then
+                    [[ $DEBUG -eq 1 ]] && echo "[DEBUG]   ✓ MATCH! Found cache: $cache_file" >&2
+
+                    # Check if multipart
+                    if [[ "$basename_cache" =~ _part([0-9]+) ]]; then
+                        part_num="${BASH_REMATCH[1]}"
+                        part_label="Part ${part_num}: "
+                    fi
+
+                    # Read message from cache file (plain text, easy!)
+                    msg_content=$(cat "$cache_file" 2>/dev/null | tr '\n' ' ' | head -c 80)
+
+                    # Add part label
+                    if [[ -n "$part_label" ]]; then
+                        msg_content="${part_label}${msg_content}"
+                    fi
+
+                    # Delete cache file to prevent accumulation
+                    rm -f "$cache_file" 2>/dev/null
+                    [[ $DEBUG -eq 1 ]] && echo "[DEBUG] Deleted cache file" >&2
+
+                    break
+                fi
+            fi
+        done
+
+        [[ $DEBUG -eq 1 ]] && echo "[DEBUG] msg_content: ${msg_content:0:50}" >&2
 
         if [[ -n "$msg_content" ]]; then
             # Print the OUT line first
             echo -e "$msg"
             # Then print the message content on a second line
             msg="[$time] ${MAGENTA}  ↳ Message:${RESET} ${DARKGRAY}\"${msg_content}...\"${RESET}"
+            [[ $DEBUG -eq 1 ]] && echo "[DEBUG] Set msg to message content line" >&2
+        else
+            [[ $DEBUG -eq 1 ]] && echo "[DEBUG] msg_content is EMPTY!" >&2
         fi
         
     # VPS forwarding status - SUCCESS
