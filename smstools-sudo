@@ -1,0 +1,10 @@
+# Sudoers configuration for SMS modem status collector and monitoring
+# Allows rom user to manage smstools service without password
+rom ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop smstools
+rom ALL=(ALL) NOPASSWD: /usr/bin/systemctl start smstools
+rom ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart smstools
+rom ALL=(ALL) NOPASSWD: /usr/bin/systemctl status smstools
+rom ALL=(ALL) NOPASSWD: /usr/bin/stty -F /dev/ttyUSB*
+rom ALL=(ALL) NOPASSWD: /home/rom/sms_watch.sh
+rom ALL=(ALL) NOPASSWD: /bin/cat /dev/ttyUSB*
+rom ALL=(ALL) NOPASSWD: /usr/bin/timeout * cat /dev/ttyUSB*

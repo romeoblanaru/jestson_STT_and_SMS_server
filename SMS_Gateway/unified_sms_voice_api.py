@@ -80,9 +80,13 @@ def split_sms_intelligently(message, max_length=70):
     this, we split long messages at the API level and send them as separate
     single-part SMS with 2-second delays between parts.
 
-    Splitting algorithm (searches backwards from position 70 to 15):
-    Step 0: Try to find carriage return (\n or \r) anywhere in chunk - split there
-    Step 1: Look backwards from chr 70 to chr 15 for punctuation (., !, ?, :, ;) - exclude comma
+    Splitting algorithm:
+    Step 0: PRIORITY SPLIT - Split at '?', '\n', '\r', ' 1.', ' 2.', etc. ANYWHERE in message
+            - '?', '\n', '\r' - delimiter stays with PRECEDING text
+            - ' 1.', ' 2.', ' 3.' (space+digit+dot) - delimiter stays with FOLLOWING text
+            After splitting, check each part for length and apply Steps 1-4 if needed
+    Step 1: Look backwards from chr 70 to chr 15 for punctuation (., !, ;)
+            - EXCLUDE dots preceded by digits (e.g., "30.00" or "1.")
     Step 2: If not found, look backwards from chr 70 to chr 15 for comma (,)
     Step 3: If not found, look backwards from chr 70 to chr 15 for space
     Step 4: If nothing found, hard split at max_length
@@ -96,52 +100,99 @@ def split_sms_intelligently(message, max_length=70):
     if len(message) <= max_length:
         return [message]
 
+    # Step 0: PRIORITY SPLIT on '?', '\n', '\r', ' 1.', ' 2.', etc. anywhere in message
+    import re
+    # Pattern explanation:
+    # - (\s\d\.) matches space+digit+dot for numbered lists (e.g., ' 1.', ' 2.')
+    # - ([\n\r?]) matches newline/carriage return/question mark
+    priority_chunks = re.split(r'(\s\d\.|\n|\r|\?)', message)
+
+    # Reconstruct chunks with delimiters
+    # - For \n, \r, ?: delimiter stays with PRECEDING text
+    # - For ' 1.', ' 2.', etc.: delimiter stays with FOLLOWING text
+    initial_parts = []
+    temp = ""
+    for i, part in enumerate(priority_chunks):
+        if part in ['\n', '\r', '?']:
+            # These delimiters stay with PRECEDING text
+            temp += part
+            if temp.strip():  # Only add non-empty parts
+                initial_parts.append(temp)
+            temp = ""
+        elif part and re.match(r'\s\d\.', part):
+            # Numbered list delimiter (e.g., ' 1.', ' 2.') stays with FOLLOWING text
+            if temp.strip():
+                initial_parts.append(temp)
+            temp = part  # Start new part WITH the delimiter
+        else:
+            # Regular text
+            temp += part
+
+    if temp.strip():  # Add any remaining text
+        initial_parts.append(temp)
+
+    # If no priority split happened, use the whole message
+    if not initial_parts:
+        initial_parts = [message]
+
+    # Now apply length-based splitting (Steps 1-4) to each chunk
+    final_parts = []
+    for chunk in initial_parts:
+        final_parts.extend(_split_by_length(chunk.strip(), max_length))
+
+    return final_parts
+
+
+def _split_by_length(text, max_length):
+    """
+    Split text by length at intelligent boundaries (Steps 1-4)
+    Helper function for split_sms_intelligently
+    """
+    if len(text) <= max_length:
+        return [text]
+
     parts = []
-    remaining = message
+    remaining = text
+    min_search_pos = 15  # Don't split too early
 
     while remaining:
         if len(remaining) <= max_length:
-            # Last part
             parts.append(remaining)
             break
 
-        # Get chunk to split
         chunk = remaining[:max_length]
         split_pos = -1
-        min_search_pos = 15  # Don't split too early (minimum 15 chars per part)
 
-        # Step 0: Look for carriage return (\n or \r) anywhere in chunk
-        for i in range(len(chunk) - 1, -1, -1):
-            if chunk[i] in ['\n', '\r']:
-                split_pos = i + 1  # Include the newline
+        # Step 1: Look backwards for punctuation (., !, ;)
+        # EXCLUDE dots preceded by digits (30.00, 1., etc.)
+        for i in range(len(chunk) - 1, min_search_pos - 1, -1):
+            if chunk[i] in ['.', '!', ';']:
+                # Special handling for dots
+                if chunk[i] == '.':
+                    # Check if preceded by a digit (skip if it's part of a number)
+                    if i > 0 and chunk[i-1].isdigit():
+                        continue  # Skip this dot, it's in a number like "30.00" or "1."
+                split_pos = i + 1  # Include the punctuation
                 break
 
-        # Step 1: Look backwards from position 70 to 15 for punctuation (exclude comma)
-        if split_pos == -1:
-            for i in range(len(chunk) - 1, min_search_pos - 1, -1):
-                if chunk[i] in ['.', '!', '?', ':', ';']:
-                    split_pos = i + 1  # Include the punctuation
-                    break
-
-        # Step 2: Look backwards from position 70 to 15 for comma
+        # Step 2: Look backwards for comma
         if split_pos == -1:
             for i in range(len(chunk) - 1, min_search_pos - 1, -1):
                 if chunk[i] == ',':
-                    split_pos = i + 1  # Include the comma
+                    split_pos = i + 1
                     break
 
-        # Step 3: Look backwards from position 70 to 15 for space
+        # Step 3: Look backwards for space
         if split_pos == -1:
             for i in range(len(chunk) - 1, min_search_pos - 1, -1):
                 if chunk[i] == ' ':
-                    split_pos = i + 1  # Include the space
+                    split_pos = i + 1
                     break
 
-        # Step 4: No good split found - hard split at max_length
+        # Step 4: Hard split at max_length
         if split_pos == -1:
             split_pos = max_length
 
-        # Add this part
         parts.append(remaining[:split_pos].rstrip())
         remaining = remaining[split_pos:].lstrip()
 
@@ -241,9 +292,9 @@ class SMSProcessor(threading.Thread):
                     # Log more chars (100) so each part shows unique content in monitoring
                     logger.info(f"SMS queued: {recipient} - Part {part_num}/{len(message_parts)} - {part_text[:100]} (Unicode: {needs_unicode})")
 
-                    # Add 2-second delay between parts (except after last part)
+                    # Add 1.5-second delay between parts (except after last part)
                     if part_num < len(message_parts):
-                        time.sleep(2)
+                        time.sleep(1.5)
 
                 logger.info(f"SMS processing complete for {recipient}: {len(files_created)} files created")
 

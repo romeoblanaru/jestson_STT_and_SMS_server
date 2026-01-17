@@ -1,0 +1,17 @@
+[Unit]
+Description=SMSTools Daemon
+After=network.target
+
+[Service]
+Type=forking
+# Ensure runtime directory exists before starting
+ExecStartPre=/bin/mkdir -p /run/smstools
+ExecStart=/usr/sbin/smsd -c/etc/smsd.conf -p/run/smsd.pid
+ExecStop=/usr/bin/killall smsd
+PIDFile=/run/smsd.pid
+Restart=always
+RestartSec=10
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

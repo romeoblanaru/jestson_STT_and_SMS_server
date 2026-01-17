@@ -25,64 +25,6 @@ def run_monitoring_async(script, args):
     except Exception as e:
         print(f"Background task error: {e}")
 
-@app.route('/monitor/<action>/sync', methods=['POST', 'GET'])
-def trigger_monitor_sync(action):
-    """Run monitoring script synchronously and return full output"""
-
-    valid_actions = [
-        'vpn', 'system', 'system-full', 'network',
-        'ec25', 'sim7600', 'tts', 'test', 'logs'
-    ]
-
-    if action not in valid_actions:
-        return jsonify({
-            'status': 'error',
-            'message': f'Invalid action. Valid actions: {", ".join(valid_actions)}'
-        }), 400
-
-    try:
-        # Prepare script arguments
-        if action == 'logs':
-            script = '/home/rom/log_monitor.sh'
-            args = ['check']
-        elif action == 'sim7600':
-            script = '/home/rom/check_sim7600_status.sh'
-            args = []
-        elif action == 'tts':
-            script = '/home/rom/monitor_tts_health.sh'
-            args = []
-        else:
-            script = MONITORING_SCRIPT
-            args = [action]
-
-        # Run synchronously with timeout
-        result = subprocess.run(
-            [script] + args,
-            capture_output=True,
-            text=True,
-            timeout=180
-        )
-
-        # Return full output
-        return jsonify({
-            'status': 'success',
-            'action': action,
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'return_code': result.returncode
-        })
-
-    except subprocess.TimeoutExpired:
-        return jsonify({
-            'status': 'error',
-            'message': 'Script execution timed out (180s)'
-        }), 504
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
-
 @app.route('/monitor/<action>', methods=['POST', 'GET'])
 def trigger_monitor(action):
     """Trigger monitoring script with specified action"""
@@ -111,6 +53,9 @@ def trigger_monitor(action):
         elif action == 'sim7600':
             args = []
             script = '/home/rom/check_sim7600_status.sh'
+        elif action == 'ec25':
+            args = []
+            script = '/home/rom/check_ec25_status.sh'
         elif action == 'tts':
             args = []
             script = '/home/rom/monitor_tts_health.sh'
@@ -163,25 +108,22 @@ def show_help():
     """Show available monitoring endpoints"""
     return jsonify({
         'endpoints': {
-            '/monitor/vpn': 'Check VPN connectivity (async)',
-            '/monitor/system': 'Quick system health check (async)',
-            '/monitor/system-full': 'Comprehensive system report (async)',
-            '/monitor/network': 'Check network connectivity (async)',
-            '/monitor/ec25': 'Check EC25 modem status (async)',
-            '/monitor/sim7600': 'Check SIM7600 modem status (async)',
-            '/monitor/sim7600/sync': 'Check SIM7600 modem status (sync - returns full output)',
-            '/monitor/tts': 'Check TTS queue and voice call status (async)',
-            '/monitor/tts/sync': 'Check TTS status (sync - returns full output)',
+            '/monitor/vpn': 'Check VPN connectivity',
+            '/monitor/system': 'Quick system health check',
+            '/monitor/system-full': 'Comprehensive system report',
+            '/monitor/network': 'Check network connectivity',
+            '/monitor/ec25': 'Check EC25 modem status (comprehensive)',
+            '/monitor/sim7600': 'Check SIM7600 modem status (comprehensive)',
+            '/monitor/tts': 'Check TTS queue and voice call status',
             '/monitor/test': 'Send test message',
             '/monitor/custom': 'Send custom message (POST with JSON: {"message": "...", "severity": "info"})',
             '/monitor/service/<name>': 'Check specific service status',
             '/monitor/services': 'List all available services',
-            '/monitor/logs': 'Check for recent errors and service restarts (async)',
-            '/monitor/logs/sync': 'Check logs (sync - returns full output)',
-            '/monitor/modem_reset': 'Software reset modem via USB unbind/bind (async)'
+            '/monitor/logs': 'Check for recent errors and service restarts',
+            '/monitor/modem_reset': 'Software reset modem via USB unbind/bind'
         },
         'methods': ['GET', 'POST'],
-        'note': 'All endpoints support both GET and POST methods. /sync endpoints return full output in HTTP response.'
+        'note': 'All endpoints run in background and send reports to VPS. Supports both GET and POST methods.'
     })
 
 @app.route('/monitor/services', methods=['GET'])

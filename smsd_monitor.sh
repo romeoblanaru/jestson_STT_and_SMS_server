@@ -7,9 +7,17 @@
 
 LOG="/var/log/smsd_monitor.log"
 SMSD_LOG="/var/log/smstools/smsd.log"
+SYSTEM_EVENTS_LOG="/var/log/smstools/smsd.log"
 MANUAL_STOP_FLAG="/tmp/smsd_manual_stop"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG" 2>&1; }
+
+system_event() {
+    # Log to system events for sms_watch.sh to display
+    local severity="$1"
+    local message="$2"
+    echo "$(date '+%Y-%m-%d %H:%M:%S'),6, SYSTEM: [$severity] $message" >> "$SYSTEM_EVENTS_LOG"
+}
 
 # Check if SMSD daemon is actually running (not just service status)
 if ! pgrep -x "smsd" > /dev/null; then
@@ -32,6 +40,7 @@ if ! pgrep -x "smsd" > /dev/null; then
     fi
 
     log "WARNING: SMSD crashed - attempting restart..."
+    system_event "WARNING" "SMSD service crashed - Auto-restart triggered"
 
     # Get last error from SMSD log
     LAST_ERROR="No specific error found"
@@ -51,28 +60,17 @@ if ! pgrep -x "smsd" > /dev/null; then
     # Check if restart was successful
     if systemctl is-active --quiet smstools; then
         log "SUCCESS: SMSD restarted successfully"
+        system_event "INFO" "SMSD service restarted - Service restored"
         STATUS="SMSD restarted successfully"
         # Clear manual stop flag since SMSD is running again
         rm -f "$MANUAL_STOP_FLAG"
     else
         log "ERROR: SMSD restart FAILED"
+        system_event "CRITICAL" "SMSD restart FAILED - Manual intervention required"
         STATUS="SMSD restart FAILED - manual intervention required"
     fi
 
-    # Send notification to VPS webhook
-    VPS_WEBHOOK="http://10.100.0.1:8088/webhook/sms/status"
-
-    curl -s -X POST "$VPS_WEBHOOK" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"gateway_ip\": \"10.100.0.2\",
-            \"service\": \"smstools\",
-            \"status\": \"$(if systemctl is-active --quiet smstools; then echo 'restarted'; else echo 'restart_failed'; fi)\",
-            \"error\": \"SMSD found down. Last error: ${LAST_ERROR:-No errors in recent logs}\",
-            \"timestamp\": \"$(date -Iseconds)\"
-        }" >> "$LOG" 2>&1
-
-    # Also send via pi_send_message.sh if it exists (for backwards compatibility)
+    # Send notification to VPS via pi_send_message.sh
     NOTIFICATION="⚠️ WARNING: SMSD on Jetson (STT/ SMS server) found down and restart attempted
 
 Status: $STATUS

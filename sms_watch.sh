@@ -185,6 +185,29 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
         fi
         msg="[$time] ${RED}✗ ERROR${RESET} - VPS down - ${RED}${error_msg}${RESET}"
 
+    # SYSTEM EVENTS (Modem/SMSD crashes and recovery)
+    elif [[ "$line" =~ "SYSTEM: [" ]]; then
+        severity=$(echo "$line" | sed -n 's/.*SYSTEM: \[\([^]]*\)\].*/\1/p')
+        event_msg=$(echo "$line" | sed -n 's/.*SYSTEM: \[[^]]*\] \(.*\)/\1/p')
+
+        case "$severity" in
+            CRITICAL)
+                msg="[$time] ${RED}⚠ SYSTEM${RESET} - ${RED}$event_msg${RESET}"
+                ;;
+            WARNING)
+                msg="[$time] ${YELLOW}⚠ SYSTEM${RESET} - ${YELLOW}$event_msg${RESET}"
+                ;;
+            INFO)
+                msg="[$time] ${GREEN}✓ SYSTEM${RESET} - ${GREEN}$event_msg${RESET}"
+                ;;
+            ERROR)
+                msg="[$time] ${RED}✗ SYSTEM${RESET} - ${RED}$event_msg${RESET}"
+                ;;
+            *)
+                msg="[$time] ${CYAN}ℹ SYSTEM${RESET} - $event_msg"
+                ;;
+        esac
+
     # MODEM ERROR
     elif [[ "$line" =~ "The modem answer was not OK" ]] && [[ "$line" =~ "CMS ERROR" ]]; then
         error=$(echo "$line" | grep -oE 'CMS ERROR: [^$]+' || echo "Unknown error")

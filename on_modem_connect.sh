@@ -59,6 +59,19 @@ chmod 666 /dev/ttyUSB_SIM7600_* 2>/dev/null
 
 log "All symlinks created successfully"
 
+# Auto-configure SMSD for detected modem type
+log "Auto-configuring SMSD for modem..."
+if [ -x /home/rom/configure_smsd_for_modem.sh ]; then
+    /home/rom/configure_smsd_for_modem.sh >> "$LOG" 2>&1
+    if [ $? -eq 0 ]; then
+        log "SMSD auto-configured successfully"
+    else
+        log "WARNING: SMSD auto-configuration failed"
+    fi
+else
+    log "WARNING: configure_smsd_for_modem.sh not found or not executable"
+fi
+
 # List all USB ports
 USB_PORTS=$(ls /dev/ttyUSB* 2>/dev/null | xargs)
 log "All USB ports: $USB_PORTS"
