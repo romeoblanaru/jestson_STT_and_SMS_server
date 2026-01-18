@@ -143,13 +143,19 @@ if [ "$LTE_4G_ENABLED" = "ON" ] && [ "$LTE_4G_FAILOVER" = "OFF" ]; then
         # 4G is being used - send notification if not already sent
         if [ ! -f "$NOTIFICATION_SENT_FILE" ]; then
             log "⚠️ Traffic using EC25 LTE backup (WiFi/LAN unavailable)"
-            send_notification "⚠️ Internet via EC25 LTE Backup - WiFi/LAN down (Passive failover)" "warning"
+            send_notification "⚠️ Internet via EC25 LTE MobileData - WiFi/LAN down (Passive failover)" "warning"
             touch "$NOTIFICATION_SENT_FILE"
         fi
 
         # Check if primary internet came back
         if check_primary_internet; then
             log "✅ Primary internet restored - traffic will switch automatically"
+
+            # Remove any low-metric DHCP route from EC25 to ensure WiFi takes priority
+            sudo ip route del default via "$EC25_GATEWAY" dev "$EC25_INTERFACE" metric 100 2>/dev/null
+            sudo ip route del default via "$EC25_GATEWAY" dev "$EC25_INTERFACE" proto dhcp 2>/dev/null
+            log "Removed low-metric mobile routes - WiFi now primary"
+
             send_notification "✅ Primary Internet Restored - EC25 LTE now standby (Passive mode)" "info"
             rm -f "$NOTIFICATION_SENT_FILE"
         fi

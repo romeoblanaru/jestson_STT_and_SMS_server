@@ -51,8 +51,8 @@ if ! pgrep -x "smsd" > /dev/null; then
         fi
     fi
 
-    # Restart SMSD
-    sudo /usr/bin/systemctl start smstools 2>&1 | tee -a "$LOG"
+    # Restart SMSD (use 'restart' not 'start' due to systemd RemainAfterExit=yes)
+    sudo /usr/bin/systemctl restart smstools 2>&1 | tee -a "$LOG"
 
     # Wait a moment for service to start
     sleep 2
