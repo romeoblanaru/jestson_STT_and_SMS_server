@@ -1,0 +1,24 @@
+[Unit]
+Description=SIM7600 Voice Bot with Progressive Transcription
+After=network.target sim7600-detector.service
+Wants=sim7600-detector.service
+
+[Service]
+Type=simple
+User=rom
+WorkingDirectory=/home/rom
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/rom/.env
+ExecStart=/usr/bin/python3 /home/rom/sim7600_voice_bot.py
+Restart=on-failure
+RestartSec=10
+
+# Emergency log dump on service crash
+ExecStopPost=/bin/bash -c '/usr/local/bin/flush_logs.sh --emergency "Service stopped/crashed"'
+
+# Standard output to journal (systemd logs stay on SD card)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

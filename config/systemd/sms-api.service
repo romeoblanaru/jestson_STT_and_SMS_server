@@ -1,0 +1,18 @@
+[Unit]
+Description=SMS API Service
+After=network.target
+
+[Service]
+Type=simple
+User=rom
+WorkingDirectory=/home/rom/SMS_Gateway
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/rom/.env
+ExecStart=/usr/bin/python3 /home/rom/SMS_Gateway/unified_sms_voice_api.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

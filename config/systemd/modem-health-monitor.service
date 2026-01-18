@@ -1,0 +1,16 @@
+[Unit]
+Description=Modem Health Monitor and Auto-Recovery
+After=smstools.service
+Requires=smstools.service
+
+[Service]
+Type=simple
+ExecStart=/home/rom/modem_health_monitor.sh
+Restart=always
+RestartSec=30
+User=root
+StandardOutput=append:/var/log/modem_health_monitor.log
+StandardError=append:/var/log/modem_health_monitor.log
+
+[Install]
+WantedBy=multi-user.target

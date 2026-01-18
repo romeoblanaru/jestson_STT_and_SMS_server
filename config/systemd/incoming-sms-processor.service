@@ -1,0 +1,16 @@
+[Unit]
+Description=Incoming SMS Processor for smstools
+After=smstools.service
+Requires=smstools.service
+
+[Service]
+Type=simple
+ExecStart=/home/rom/incoming_sms_processor.sh
+Restart=always
+RestartSec=10
+User=root
+StandardOutput=append:/var/log/incoming_sms_processor.log
+StandardError=append:/var/log/incoming_sms_processor.log
+
+[Install]
+WantedBy=multi-user.target

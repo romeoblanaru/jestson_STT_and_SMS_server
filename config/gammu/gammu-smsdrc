@@ -1,0 +1,31 @@
+# Gammu SMSD Configuration
+
+[gammu]
+device = /dev/serial/by-id/usb-SimTech__Incorporated_SimTech__Incorporated_0123456789ABCDEF-if02-port0
+connection = at115200
+
+[smsd]
+service = files
+logfile = /var/log/gammu/smsd.log
+debuglevel = 2
+
+# Message storage
+inboxpath = /var/spool/gammu/inbox/
+outboxpath = /var/spool/gammu/outbox/
+sentsmspath = /var/spool/gammu/sent/
+errorsmspath = /var/spool/gammu/error/
+
+# Processing
+inboxformat = detail
+transmitformat = auto
+deliveryreport = no
+
+# Timing
+commtimeout = 30
+sendtimeout = 30
+receivefrequency = 15
+loopsleep = 10
+
+# Disable problematic checks
+checksecurity = 0
+checkbattery = 0

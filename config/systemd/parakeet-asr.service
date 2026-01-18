@@ -1,0 +1,20 @@
+[Unit]
+Description=Parakeet-TDT ASR Server with Fuzzy Correction
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=rom
+WorkingDirectory=/home/rom
+ExecStartPre=/bin/sh -c '/usr/bin/docker ps -q --filter ancestor=parakeet-server | /usr/bin/xargs --no-run-if-empty /usr/bin/docker stop || true'
+ExecStart=/home/rom/start_parakeet_server.sh
+ExecStop=/bin/sh -c '/usr/bin/docker ps -q --filter ancestor=parakeet-server | /usr/bin/xargs --no-run-if-empty /usr/bin/docker stop || true'
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

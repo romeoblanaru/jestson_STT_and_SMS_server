@@ -1,0 +1,6 @@
+# * * * * * /home/rom/gammu_monitor.sh  # Disabled - using SMSD instead
+*/2 * * * * /home/rom/smsd_monitor.sh
+*/3 * * * * /home/rom/sms_retry_failed.sh
+0 0 * * * /home/rom/sms_cleanup_old.sh
+# Modem crash recovery - runs every minute
+* * * * * sudo /home/rom/modem_crash_recovery.sh

@@ -1,0 +1,11 @@
+[Unit]
+Description=EC25 Port Monitor Timer - Check every 30 seconds
+Requires=ec25-port-monitor.service
+
+[Timer]
+OnBootSec=15sec
+OnUnitActiveSec=30sec
+AccuracySec=5sec
+
+[Install]
+WantedBy=timers.target

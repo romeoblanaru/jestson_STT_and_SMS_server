@@ -1,0 +1,6 @@
+[gammu]
+device = /dev/ttyUSB_SIM7600_AT
+connection = at115200
+use_locking = yes
+logfile = /var/log/gammu.log
+logformat = textall
