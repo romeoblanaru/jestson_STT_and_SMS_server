@@ -52,16 +52,16 @@ send_notification() {
 
 # Check if primary internet (WiFi or LAN) is working
 check_primary_internet() {
-    # Try WiFi first
+    # Try WiFi first (5 pings, 5 sec timeout to avoid false failures from power saving)
     if ip link show "$WIFI_INTERFACE" 2>/dev/null | grep -q "state UP"; then
-        if ping -c 2 -W 3 -I "$WIFI_INTERFACE" "$CHECK_HOST" > /dev/null 2>&1; then
+        if ping -c 5 -W 5 -I "$WIFI_INTERFACE" "$CHECK_HOST" > /dev/null 2>&1; then
             return 0
         fi
     fi
 
-    # Try LAN if WiFi failed
+    # Try LAN if WiFi failed (5 pings, 5 sec timeout)
     if ip link show "$LAN_INTERFACE" 2>/dev/null | grep -q "state UP"; then
-        if ping -c 2 -W 3 -I "$LAN_INTERFACE" "$CHECK_HOST" > /dev/null 2>&1; then
+        if ping -c 5 -W 5 -I "$LAN_INTERFACE" "$CHECK_HOST" > /dev/null 2>&1; then
             return 0
         fi
     fi

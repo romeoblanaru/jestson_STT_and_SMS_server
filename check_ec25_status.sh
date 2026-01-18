@@ -70,27 +70,41 @@ fi
 # Check services status
 SMSTOOLS_STATUS="❌ Stopped"
 VOICEBOT_STATUS="❌ Stopped"
+MANUAL_STOP_FLAG_STATUS=""
 
-if systemctl is-active --quiet smstools; then
+# Check for manual stop flag first
+MANUAL_STOP_FLAG="/tmp/smsd_manual_stop"
+MANUAL_STOP_ACTIVE=false
+if [ -f "$MANUAL_STOP_FLAG" ]; then
+    MANUAL_STOP_ACTIVE=true
+    FLAG_AGE=$(($(date +%s) - $(stat -c %Y "$MANUAL_STOP_FLAG" 2>/dev/null || date +%s)))
+    MANUAL_STOP_FLAG_STATUS="🔴 SMSD Autorestart=OFF (Flag NOT Cleared) - Manual Paused - Age: ${FLAG_AGE}s"
+fi
+
+# Check if SMSD process is actually running (not just service status)
+if pgrep -x "smsd" > /dev/null; then
     SMSTOOLS_STATUS="✅ Running"
+else
+    # If manually stopped, show different status
+    if [ "$MANUAL_STOP_ACTIVE" = true ]; then
+        SMSTOOLS_STATUS="🛑 Manually STOPPED"
+    else
+        SMSTOOLS_STATUS="❌ Stopped"
+    fi
 fi
 
 if systemctl is-active --quiet sim7600-voice-bot; then
     VOICEBOT_STATUS="✅ Running"
 fi
 
-# Stop SMSTools temporarily to query modem
+# Stop SMSTools temporarily to query modem (using manual stop to prevent auto-restart)
 SMSTOOLS_WAS_RUNNING=false
 
-if systemctl is-active --quiet smstools; then
+if pgrep -x "smsd" > /dev/null; then
     SMSTOOLS_WAS_RUNNING=true
-    sudo /usr/bin/systemctl stop smstools 2>/dev/null
-    sleep 5
-    # Verify SMSD actually stopped
-    for i in {1..5}; do
-        systemctl is-active --quiet smstools || break
-        sleep 1
-    done
+    # Use manual stop script to disable auto-restart
+    /home/rom/smsd_manual_stop.sh > /dev/null 2>&1
+    sleep 3
 fi
 
 # Use ttyUSB2 (AT port for EC25)
@@ -291,9 +305,84 @@ if ip link show wwan0 2>/dev/null | grep -q "state UP"; then
     [ -z "$WWAN0_IP" ] && WWAN0_IP="No IP"
 fi
 
-# Restart SMSTools if it was running
+# Check for mobile data connection (any modem network interface)
+MOBILE_DATA_STATUS="❌ Not Connected"
+MOBILE_IP="No IP"
+MOBILE_INTERFACE="N/A"
+
+# First check for enx* interfaces (CDC Ethernet from EC25)
+for iface in /sys/class/net/enx*; do
+    if [ -e "$iface" ]; then
+        iface_name=$(basename "$iface")
+        if ip link show "$iface_name" 2>/dev/null | grep -qE "state (UP|UNKNOWN)"; then
+            MOBILE_INTERFACE="$iface_name"
+            MOBILE_IP=$(ip addr show "$iface_name" 2>/dev/null | grep "inet " | awk '{print $2}' | head -1)
+            if [ -n "$MOBILE_IP" ]; then
+                MOBILE_DATA_STATUS="✅ Connected"
+                break
+            fi
+        fi
+    fi
+done
+
+# If no enx* found, check traditional interfaces (wwan0, usb0, usb1)
+if [ "$MOBILE_DATA_STATUS" = "❌ Not Connected" ]; then
+    for iface in wwan0 usb0 usb1; do
+        if ip link show $iface 2>/dev/null | grep -q "state UP"; then
+            MOBILE_INTERFACE="$iface"
+            MOBILE_IP=$(ip addr show $iface 2>/dev/null | grep "inet " | awk '{print $2}' | head -1)
+            if [ -n "$MOBILE_IP" ]; then
+                MOBILE_DATA_STATUS="✅ Connected"
+                break
+            fi
+        fi
+    done
+fi
+
+# If no interface UP but PDP context is active, show that
+if [ "$MOBILE_DATA_STATUS" = "❌ Not Connected" ] && [ "$CTX1_STATUS" = "✅ Active" ]; then
+    MOBILE_DATA_STATUS="⚠️ PDP Active (no network interface)"
+fi
+
+# Test mobile internet if interface is connected
+MOBILE_INTERNET_TEST="❌ Not tested"
+if [ "$MOBILE_DATA_STATUS" = "✅ Connected" ] && [ "$MOBILE_INTERFACE" != "N/A" ]; then
+    PING_RESULT=$(ping -c 2 -W 3 -I "$MOBILE_INTERFACE" 8.8.8.8 2>/dev/null | grep "time=" | tail -1 | sed -n 's/.*time=\([0-9.]*\) ms.*/\1ms/p')
+    if [ -n "$PING_RESULT" ]; then
+        MOBILE_INTERNET_TEST="✅ Working (${PING_RESULT})"
+    else
+        MOBILE_INTERNET_TEST="⚠️ No response"
+    fi
+fi
+
+# Check routing status (primary and backup)
+PRIMARY_CONNECTION="Unknown"
+BACKUP_ROUTE="Unknown"
+
+# Get default routes
+DEFAULT_ROUTES=$(ip route show | grep "^default")
+
+# Find primary (lowest metric)
+if echo "$DEFAULT_ROUTES" | grep -q "wlP1p1s0"; then
+    PRIMARY_METRIC=$(echo "$DEFAULT_ROUTES" | grep "wlP1p1s0" | grep -oP 'metric \K\d+' || echo "0")
+    PRIMARY_CONNECTION="WiFi (metric ${PRIMARY_METRIC}) - ✅ ACTIVE"
+elif echo "$DEFAULT_ROUTES" | grep -qE "enP|eth"; then
+    PRIMARY_METRIC=$(echo "$DEFAULT_ROUTES" | grep -E "enP|eth" | grep -oP 'metric \K\d+' | head -1 || echo "0")
+    PRIMARY_CONNECTION="LAN (metric ${PRIMARY_METRIC}) - ✅ ACTIVE"
+else
+    PRIMARY_CONNECTION="❌ No primary connection"
+fi
+
+# Find backup route (EC25)
+if echo "$DEFAULT_ROUTES" | grep -qE "enx.*metric 999|192.168.225.1"; then
+    BACKUP_ROUTE="EC25 LTE (metric 999) - ✅ READY"
+else
+    BACKUP_ROUTE="❌ Not configured"
+fi
+
+# Restart SMSTools if it was running (using manual start to re-enable auto-restart)
 if [ "$SMSTOOLS_WAS_RUNNING" = true ]; then
-    sudo /usr/bin/systemctl start smstools
+    /home/rom/smsd_manual_start.sh > /dev/null 2>&1
 fi
 
 # Build comprehensive status message
@@ -333,11 +422,19 @@ STATUS_MSG+=""$'\n'
 STATUS_MSG+="**🔌 Connectivity:**"$'\n'
 STATUS_MSG+="• AT Port: ${AT_PORT_STATUS} (${AT_PORT})"$'\n'
 STATUS_MSG+="• Internet: ${INTERNET} (Ping: ${PING_TIME})"$'\n'
-STATUS_MSG+="• wwan0: ${WWAN0_STATUS} (${WWAN0_IP})"$'\n'
+STATUS_MSG+="• Mobile Data: ${MOBILE_DATA_STATUS}"$'\n'
+STATUS_MSG+="• Mobile IP: ${MOBILE_IP} (${MOBILE_INTERFACE})"$'\n'
+STATUS_MSG+="• Mobile Internet Test: ${MOBILE_INTERNET_TEST}"$'\n'
+STATUS_MSG+="• PDP Context: ${PDP_CONTEXT}"$'\n'
+STATUS_MSG+="• Primary Connection: ${PRIMARY_CONNECTION}"$'\n'
+STATUS_MSG+="• Backup Route: ${BACKUP_ROUTE}"$'\n'
 STATUS_MSG+=""$'\n'
 STATUS_MSG+="**⚙️ Services:**"$'\n'
 STATUS_MSG+="• SMSTools: ${SMSTOOLS_STATUS}"$'\n'
 STATUS_MSG+="• Voice Bot: ${VOICEBOT_STATUS}"$'\n'
+if [ -n "$MANUAL_STOP_FLAG_STATUS" ]; then
+    STATUS_MSG+="• **ALERT:** ${MANUAL_STOP_FLAG_STATUS}"$'\n'
+fi
 STATUS_MSG+=""$'\n'
 
 # Check STT Server (Parakeet) status

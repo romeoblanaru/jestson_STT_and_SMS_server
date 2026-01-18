@@ -112,23 +112,31 @@ configure_modem_settings() {
 }
 
 restart_smsd_if_needed() {
-    if systemctl is-active --quiet smstools; then
+    if pgrep -x smsd > /dev/null; then
         log "SMSD is running - restart required for changes to take effect"
         log "Restarting SMSD..."
 
-        if sudo systemctl restart smstools; then
-            log "SUCCESS: SMSD restarted"
-            sleep 3
+        # Use manual stop/start scripts to properly handle the manual stop flag
+        if /home/rom/smsd_manual_stop.sh > /dev/null 2>&1; then
+            sleep 2
 
-            if systemctl is-active --quiet smstools; then
-                log "SMSD is running with new configuration"
-                return 0
+            if /home/rom/smsd_manual_start.sh > /dev/null 2>&1; then
+                log "SUCCESS: SMSD restarted"
+                sleep 3
+
+                if pgrep -x smsd > /dev/null; then
+                    log "SMSD is running with new configuration"
+                    return 0
+                else
+                    log "ERROR: SMSD failed to start after restart"
+                    return 1
+                fi
             else
-                log "ERROR: SMSD failed to start after restart"
+                log "ERROR: Failed to start SMSD"
                 return 1
             fi
         else
-            log "ERROR: Failed to restart SMSD"
+            log "ERROR: Failed to stop SMSD"
             return 1
         fi
     else

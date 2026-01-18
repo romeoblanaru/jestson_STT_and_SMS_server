@@ -1,0 +1,17 @@
+# Allow user 'rom' to run SMSD-related commands without password
+# Created: 2026-01-17
+# Purpose: Secure SMSD manual stop/start scripts
+
+# Allow starting SMSD daemon
+rom ALL=(ALL) NOPASSWD: /usr/sbin/smsd
+
+# Allow killing SMSD process
+rom ALL=(ALL) NOPASSWD: /usr/bin/pkill -9 smsd
+
+# Allow reading SMS spool files for monitoring
+rom ALL=(ALL) NOPASSWD: /usr/bin/grep * /var/spool/sms/incoming/*
+rom ALL=(ALL) NOPASSWD: /usr/bin/awk * /var/spool/sms/incoming/*
+
+# Allow systemctl operations for smstools service (used by check_ec25_status.sh legacy code)
+rom ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop smstools
+rom ALL=(ALL) NOPASSWD: /usr/bin/systemctl start smstools

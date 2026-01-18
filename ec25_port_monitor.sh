@@ -111,12 +111,34 @@ else
     PORT_CHANGED=true
 fi
 
+# If port changed, run smart configurator to check IMEI/IMSI
+if [ "$PORT_CHANGED" = "true" ]; then
+    log "Port changed - running smart configurator..."
+
+    # Run configurator synchronously (it will check IMEI/IMSI and configure if needed)
+    if [ -x /home/rom/ec25_smart_configurator.sh ]; then
+        /home/rom/ec25_smart_configurator.sh
+        CONFIGURATOR_STATUS=$?
+
+        if [ $CONFIGURATOR_STATUS -eq 0 ]; then
+            log "Configurator completed successfully"
+        else
+            log "WARNING: Configurator exited with status $CONFIGURATOR_STATUS"
+        fi
+    else
+        log "WARNING: Configurator not found or not executable"
+    fi
+fi
+
 # Restart SMSTools if port changed and it's running
 if [ "$PORT_CHANGED" = "true" ] && pgrep smsd > /dev/null; then
     log "Port changed - restarting SMSTools..."
-    pkill -9 smsd
+
+    # Use manual stop/start scripts to properly handle the manual stop flag
+    /home/rom/smsd_manual_stop.sh > /dev/null 2>&1
     sleep 2
-    /usr/sbin/smsd -p/var/run/smstools/smsd.pid -i/var/run/smstools/smsd.working -uroot -groot
+    /home/rom/smsd_manual_start.sh > /dev/null 2>&1
+
     log "SMSTools restarted on new port"
 fi
 

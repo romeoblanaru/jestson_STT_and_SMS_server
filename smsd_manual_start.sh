@@ -8,7 +8,7 @@ MANUAL_STOP_FLAG="/tmp/smsd_manual_stop"
 echo "Starting SMSD and re-enabling auto-restart..."
 
 # Start SMSD
-echo 'Romy_1202' | sudo -S /usr/sbin/smsd
+sudo /usr/sbin/smsd
 
 sleep 3
 
@@ -24,6 +24,9 @@ if pgrep -x "smsd" > /dev/null; then
 
     echo ""
     echo "SMSD is running and will auto-restart if crashed"
+
+    # Log to sms_watch (appears in yellow like other SMSD messages)
+    echo "$(date '+%Y-%m-%d %H:%M:%S') SYSTEM: [INFO] ▶️ SMSD manually started (auto-restart re-enabled)" >> /var/log/smstools/smsd.log
 else
     echo "✗ Failed to start SMSD"
     exit 1
