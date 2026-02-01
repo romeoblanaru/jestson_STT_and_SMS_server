@@ -163,6 +163,7 @@ if [ "$LTE_4G_ENABLED" = "ON" ] && [ "$LTE_4G_FAILOVER" = "OFF" ]; then
         # Primary internet is being used - clean up notification flag
         if [ -f "$NOTIFICATION_SENT_FILE" ]; then
             log "✅ Traffic using primary internet (WiFi/LAN)"
+            send_notification "✅ Primary Internet Restored - EC25 LTE now standby (Passive mode)" "info"
             rm -f "$NOTIFICATION_SENT_FILE"
         fi
     fi

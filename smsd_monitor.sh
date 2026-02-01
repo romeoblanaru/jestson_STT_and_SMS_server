@@ -19,6 +19,21 @@ system_event() {
     echo "$(date '+%Y-%m-%d %H:%M:%S'),6, SYSTEM: [$severity] $message" >> "$SYSTEM_EVENTS_LOG"
 }
 
+# Check if modem has lost registration (needs restart even if SMSD is running)
+UNREG_COUNT=$(tail -100 "$SMSD_LOG" 2>/dev/null | grep -c "MODEM IS NOT REGISTERED" || echo "0")
+if [ "$UNREG_COUNT" -gt 20 ]; then
+    log "WARNING: Modem unregistered for extended period (${UNREG_COUNT} retries) - restarting SMSD"
+    system_event "WARNING" "Modem lost registration - Auto-restarting SMSD to restore cellular connection"
+    sudo /usr/bin/systemctl restart smstools 2>&1 | tee -a "$LOG"
+    sleep 3
+    if tail -20 "$SMSD_LOG" 2>/dev/null | grep -q "Modem is registered to the network"; then
+        log "SUCCESS: Modem re-registered after SMSD restart"
+        system_event "INFO" "Modem registration restored - Auto-restart successful"
+    else
+        log "WARNING: Modem still not registered after restart"
+    fi
+fi
+
 # Check if SMSD daemon is actually running (not just service status)
 if ! pgrep -x "smsd" > /dev/null; then
 

@@ -1,3 +1,6 @@
+# System dependencies (install via apt)
+# sudo apt install adb smstools picocom inotify-tools
+
 # Core dependencies
 pyserial>=3.5
 requests>=2.31.0

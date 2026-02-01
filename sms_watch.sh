@@ -1,8 +1,8 @@
 #!/bin/bash
 # SMS Activity Monitor with Chronological Sorting
-# Version: 2.7 - Production ready: 2sec wait, debug off
+# Version: 2.9 - Simplified DroidLink display, added Samsung LocalIP incoming
 
-VERSION="2.7"
+VERSION="2.9"
 DEBUG=0  # Set to 1 to enable debug output
 CACHE_DIR="/tmp/sms_msg_cache"
 
@@ -56,8 +56,11 @@ process_buffer() {
 FLUSHER_PID=$!
 trap "kill $FLUSHER_PID 2>/dev/null; rm -f $BUFFER_FILE $BUFFER_FILE.flush" EXIT
 
-# Tail unified API logs, SMS gateway logs, and SMSTools logs
-tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gateway.log /var/log/smstools/smsd.log 2>/dev/null | while IFS= read -r line; do
+# Ensure DroidLink log file exists
+touch /var/log/smstools/droidlink.log 2>/dev/null || sudo touch /var/log/smstools/droidlink.log 2>/dev/null
+
+# Tail unified API logs, SMS gateway logs, SMSTools logs, DroidLink log, and Samsung incoming log
+tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gateway.log /var/log/smstools/smsd.log /var/log/smstools/droidlink.log /var/log/smstools/samsung_incoming.log 2>/dev/null | while IFS= read -r line; do
     # Extract timestamp from log line (format: 2026-01-08 14:27:29,xxx)
     if [[ "$line" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
         full_timestamp="${BASH_REMATCH[1]}"
@@ -74,7 +77,7 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
     #     msg_content=$(echo "$line" | sed -n 's/.*SMS received from [^:]*: \(.*\)/\1/p' | cut -c1-50)
     #     msg="[$time] ${BLUE}← IN${RESET} from ${YELLOW}$from${RESET} ${DARKGRAY}\"${msg_content}...\"${RESET}"
 
-    # INCOMING SMS (from SMSTools directly)
+    # INCOMING SMS (from SMSTools/EC25 modem directly)
     if [[ "$line" =~ "SMS received, From:" ]]; then
         from=$(echo "$line" | sed -n 's/.*From: \(.*\)/\1/p' | xargs)
 
@@ -82,7 +85,7 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
         if [[ "$from" == "VODAFONE" ]] || [[ "$from" =~ ^[A-Z]+$ ]]; then
             msg="[$time] ${CYAN}← SYSTEM${RESET} from ${YELLOW}$from${RESET}"
         else
-            msg="[$time] ${LIGHTBLUEBG} → IN ${RESET} from ${YELLOW}$from${RESET}"
+            msg="[$time] ${LIGHTBLUEBG} → IN ${RESET} from ${YELLOW}$from${RESET} ${CYAN}(EC25)${RESET}"
         fi
 
         # Read message body from the most recent incoming file
@@ -221,6 +224,30 @@ tail -f /var/log/voice_bot_ram/unified_api.log /var/log/voice_bot_ram/sms_gatewa
             recipient="unknown"
         fi
         msg="[$time] ${RED}✗✗ SEND FAILED${RESET} to ${YELLOW}$recipient${RESET} - moved to ${RED}failed/${RESET} (${filename})"
+
+    # DroidLink SMS sent (via MacroDroid on Samsung phone) - Single combined display
+    elif [[ "$line" =~ "SENT via DroidLink" ]]; then
+        droid_number=$(echo "$line" | sed -n 's/.*To: \([^ ]*\).*/\1/p')
+        droid_msg=$(echo "$line" | sed -n 's/.*Message: \(.*\)/\1/p' | head -c 60)
+        msg="[$time] ${ORANGE}← OUT${RESET} to ${YELLOW}$droid_number${RESET} ${MAGENTA}(via DroidLink)${RESET}"
+        echo -e "$msg"
+        msg="[$time] ${MAGENTA}  ↳ Message:${RESET} ${DARKGRAY}\"${droid_msg}\"${RESET}"
+
+    # DroidLink error only (skip the intermediate status messages)
+    elif [[ "$line" =~ "DroidLink: URL Error" ]] || [[ "$line" =~ "DroidLink: Error" ]] || [[ "$line" =~ "DroidLink: HTTP" ]]; then
+        error_msg=$(echo "$line" | sed -n 's/.*DroidLink: \(.*\)/\1/p' | head -c 50)
+        msg="[$time] ${RED}✗ DROIDLINK${RESET} - ${RED}${error_msg}${RESET}"
+
+    # Samsung incoming SMS (via LocalIP webhook from MacroDroid)
+    # Pattern: "SMS received from +number:" (no comma, unlike EC25 which has "SMS received, From:")
+    elif [[ "$line" =~ "SMS received from " ]] && [[ "$line" =~ ": " ]] && [[ ! "$line" =~ "SMS received, From:" ]]; then
+        from=$(echo "$line" | sed -n 's/.*SMS received from \([^:]*\):.*/\1/p')
+        msg_preview=$(echo "$line" | sed -n 's/.*SMS received from [^:]*: \(.*\)/\1/p' | sed 's/\.\.\.$//' | head -c 50)
+        msg="[$time] ${LIGHTBLUEBG} → IN ${RESET} from ${YELLOW}$from${RESET} ${CYAN}(LocalIP)${RESET}"
+        if [[ -n "$msg_preview" ]]; then
+            echo -e "$msg"
+            msg="[$time] ${MAGENTA}  ↳ Message:${RESET} ${DARKGRAY}\"${msg_preview}\"${RESET}"
+        fi
 
     # Webhook received
     elif [[ "$line" =~ "POST /send" ]] && [[ "$line" =~ "10.100.0.1" ]]; then

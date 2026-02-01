@@ -15,6 +15,9 @@ import queue
 import sys
 import numpy as np
 from pathlib import Path
+import urllib.parse
+import urllib.request
+import ssl
 
 # Add parent directory for imports
 sys.path.insert(0, '/home/rom')
@@ -69,6 +72,56 @@ logger.info("Unified API logging initialized (RAM disk + journal)")
 
 # Monitoring functions removed - moved to port 8070 monitoring webhook
 # All modem monitoring should be done via port 8070, not the SMS gateway
+
+def send_via_droidlink(droid_link, phone_nr, message):
+    """
+    Send SMS via MacroDroid DroidLink
+    URL format: {droid_link}?message={encoded}&phone_nr={phone}
+    Sent through VPN tunnel (Jetson routes through VPN)
+
+    Returns: (success: bool, response: str)
+    """
+    try:
+        # URL encode the message (raw, as received from VPS)
+        encoded_message = urllib.parse.quote(message, safe='')
+        encoded_phone = urllib.parse.quote(phone_nr, safe='')
+
+        # Build full URL
+        full_url = f"{droid_link}?message={encoded_message}&phone_nr={encoded_phone}"
+
+        logger.info(f"DroidLink: Sending to {phone_nr} via {droid_link[:50]}...")
+
+        # Create SSL context (allow self-signed certs if needed)
+        ctx = ssl.create_default_context()
+
+        # Make the request (goes through VPN)
+        req = urllib.request.Request(full_url, method='GET')
+        req.add_header('User-Agent', 'JetsonSMSGateway/1.0')
+
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as response:
+            result = response.read().decode('utf-8')
+            status_code = response.getcode()
+
+        if status_code == 200:
+            logger.info(f"DroidLink: Success - {phone_nr} - Response: {result[:100]}")
+
+            # Log to DroidLink log file for sms_watch.sh
+            droid_log = "/var/log/smstools/droidlink.log"
+            with open(droid_log, 'a') as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} SENT via DroidLink To: {phone_nr} Message: {message[:50]}...\n")
+
+            return True, result
+        else:
+            logger.error(f"DroidLink: HTTP {status_code} - {result[:100]}")
+            return False, f"HTTP {status_code}"
+
+    except urllib.error.URLError as e:
+        logger.error(f"DroidLink: URL Error - {e}")
+        return False, str(e)
+    except Exception as e:
+        logger.error(f"DroidLink: Error - {e}")
+        return False, str(e)
+
 
 def split_sms_intelligently(message, max_length=70):
     """
@@ -381,11 +434,14 @@ class SMSHandler(BaseHTTPRequestHandler):
         elif self.path == '/send' or self.path == '/send_sms' or self.path == '/pi_send_message':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
-            
+
             try:
                 data = json.loads(post_data.decode('utf-8'))
                 recipient = data.get('to', '')  # Keep the + prefix for all numbers (portable across countries)
                 message = data.get('message', '')
+                droid_link_raw = data.get('droidLink') or data.get('droid_link', '')  # MacroDroid webhook URL
+                # URL-decode if it arrives encoded (e.g., https%3A%2F%2F...)
+                droid_link = urllib.parse.unquote(droid_link_raw) if droid_link_raw else ''
 
                 # Normalize phone number using gateway's country code
                 if recipient:
@@ -405,7 +461,26 @@ class SMSHandler(BaseHTTPRequestHandler):
                         'error': 'Missing recipient or message'
                     }).encode())
                     return
-                
+
+                # Check if DroidLink is specified - route via MacroDroid
+                if droid_link:
+                    logger.info(f"DroidLink specified: routing via MacroDroid to {recipient}")
+                    # Send raw message (before tokenization) via DroidLink
+                    success, response = send_via_droidlink(droid_link, recipient, message)
+
+                    self.send_response(200 if success else 502)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': success,
+                        'method': 'droidlink',
+                        'recipient': recipient,
+                        'response': response[:200] if response else '',
+                        'message_length': len(message)
+                    }).encode())
+                    return
+
+                # Traditional smstools path (no droid_link)
                 # Check if Unicode is needed
                 needs_unicode = False
                 try:
